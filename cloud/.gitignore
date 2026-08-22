@@ -1,0 +1,22 @@
+# Ignore actual config files with secrets
+backend-consumer/config/mqtt_config.yaml
+
+# Ignore Python cache
+__pycache__/
+*.py[cod]
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+
+# Ignore virtual environments
+venv/
+env/
+.venv/
+
+# Ignore IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
