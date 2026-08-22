@@ -1,0 +1,25 @@
+# MQTT Configuration Example
+# Copy this file to mqtt_config.yaml and fill in your actual values
+
+broker:
+  url: "your-iot-hub.azure-devices.net"
+  port: 8883
+  keepalive: 60
+  clean_session: false
+
+authentication:
+  method: "connection_string"
+  connection_string: "HostName=your-iot-hub.azure-devices.net;DeviceId=backend_consumer;SharedAccessKey=YOUR_KEY_HERE"
+
+subscription:
+  topics:
+    - topic: "v1/#"
+      qos: 1
+
+client:
+  client_id: "backend_consumer_01"
+  protocol: "MQTTv311"
+
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
