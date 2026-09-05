@@ -214,11 +214,10 @@ void loop()
 
         fifo_count -= 6;
     }
-
-    
-}
 /*
 TODO:
 Validate FIFO overflow behavior during continuous acquisition.
 If overflow is frequent, optimize FIFO draining in a later iteration.
 */
+    
+}
