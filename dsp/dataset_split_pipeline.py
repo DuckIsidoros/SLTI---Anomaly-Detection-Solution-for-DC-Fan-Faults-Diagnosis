@@ -21,7 +21,25 @@ def parse_arguments():
     - Keep training and validation sessions explicitly separated.
     - Prevent accidental data leakage between both datasets.
     """
+    """
+Usage from project root:
 
+python dsp/dataset_split_pipeline.py ^
+  --train ^
+  dataset/raw_healthy_table_20260831_143307.csv ^
+  dataset/raw_healthy_floor_20260901_001538.csv ^
+  --validation ^
+  dataset/raw_healthy_table_20260905_003608.csv ^
+  dataset/raw_imbalanced_table_20260831_151123.csv ^
+  dataset/raw_obstruction_table_20260831_152317.csv ^
+  --axis xyz
+
+Output:
+- dsp/output/training_xyz.csv
+- dsp/output/validation_xyz.csv
+- dsp/output/training_report_xyz.csv
+- dsp/output/validation_report_xyz.csv
+"""
     parser = argparse.ArgumentParser(
         description="Build separate training and validation FFT datasets."
     )
