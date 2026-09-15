@@ -4,6 +4,11 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from signal_conditioning import (
+    apply_bandpass_filter,
+    condition_window,
+)
+
 from windowing import (
     SAMPLING_RATE_HZ,
     WINDOW_SIZE,
@@ -66,13 +71,14 @@ def parse_arguments():
 def compute_fft(signal):
     """
     Input:
-    - One 512-sample acceleration signal.
+    - One 512-sample conditioned acceleration signal.
 
     Output:
     - Frequency bins.
     - One-sided normalized FFT magnitudes.
 
     Why:
+    - DC removal reduces static offset in each window.
     - Hann window reduces spectral leakage.
     - rFFT keeps only the non-negative frequency spectrum
       for real-valued acceleration signals.
@@ -89,22 +95,39 @@ def compute_fft(signal):
             f"expected {WINDOW_SIZE}"
         )
 
-    hann_window = np.hanning(WINDOW_SIZE)
-    windowed_signal = signal * hann_window
+    signal = condition_window(
+        signal
+    )
 
-    fft_values = np.fft.rfft(windowed_signal)
+    hann_window = np.hanning(
+        WINDOW_SIZE
+    )
+
+    windowed_signal = (
+        signal * hann_window
+    )
+
+    fft_values = np.fft.rfft(
+        windowed_signal
+    )
 
     frequencies = np.fft.rfftfreq(
         WINDOW_SIZE,
         d=1.0 / SAMPLING_RATE_HZ,
     )
 
-    magnitudes = np.abs(fft_values) / WINDOW_SIZE
+    magnitudes = (
+        np.abs(fft_values)
+        / WINDOW_SIZE
+    )
 
     return frequencies, magnitudes
 
 
-def validate_fft_output(frequencies, magnitudes):
+def validate_fft_output(
+    frequencies,
+    magnitudes,
+):
     """
     Input:
     - FFT frequency bins.
@@ -199,7 +222,9 @@ def create_fft_feature_row(
     }
 
     for axis in selected_axes:
-        column_name = AXIS_COLUMN_MAP[axis]
+        column_name = (
+            AXIS_COLUMN_MAP[axis]
+        )
 
         frequencies, magnitudes = compute_fft(
             window[column_name].values
@@ -210,7 +235,9 @@ def create_fft_feature_row(
             magnitudes,
         )
 
-        for bin_index, magnitude in enumerate(magnitudes):
+        for bin_index, magnitude in enumerate(
+            magnitudes
+        ):
             feature_row[
                 f"fft_{axis}_{bin_index}"
             ] = magnitude
@@ -234,23 +261,39 @@ def process_file(
     - Saved feature CSV.
 
     Why:
-    - Convert validated raw acceleration data into
-      fixed-size frequency-domain features for ML.
+    - Apply continuous bandpass filtering before windowing.
+    - Convert raw acceleration data into
+      frequency-domain features for ML.
     """
 
-    input_path = Path(input_path)
+    input_path = Path(
+        input_path
+    )
 
     if not input_path.exists():
         raise FileNotFoundError(
             f"Input file not found: {input_path}"
         )
 
-    df = pd.read_csv(input_path)
+    df = pd.read_csv(
+        input_path
+    )
 
     label = validate_dataframe(
         df,
         input_path,
     )
+
+    # Apply continuous bandpass filtering before windowing.
+    for column_name in [
+        "accX_raw",
+        "accY_raw",
+        "accZ_raw",
+    ]:
+        df[column_name] = apply_bandpass_filter(
+            df[column_name].values,
+            SAMPLING_RATE_HZ,
+        )
 
     selected_axes = get_selected_axes(
         axis_mode
@@ -289,7 +332,11 @@ def process_file(
     )
 
     if output_path is None:
-        output_dir = Path(__file__).resolve().parent / "output"
+        output_dir = (
+            Path(__file__).resolve().parent
+            / "output"
+        )
+
         output_dir.mkdir(
             parents=True,
             exist_ok=True,
@@ -299,6 +346,7 @@ def process_file(
             output_dir
             / f"{input_path.stem}_fft_{axis_mode}.csv"
         )
+
     else:
         output_path = Path(
             output_path
