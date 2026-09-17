@@ -1,0 +1,24 @@
+def main():
+    logger.info("Starting Backend Consumer Service...")
+    
+    # Initialize Database Writer
+    influx_config = {
+        'url': 'https://us-east-1-1.aws.cloud2.influxdata.com',  # TO-DO: Get from config
+        'token': 'your-influxdb-token',  # TO-DO: Get from config
+        'org': 'your-org',
+        'bucket': 'machine-health'
+    }
+    db_writer = DatabaseWriter(influx_config)
+    db_writer.connect_influxdb()
+    
+    # Initialize message handler with db_writer
+    handler = MessageHandler(db_writer=db_writer)
+    
+    # ... rest of the code ...
+    
+    try:
+        mqtt_client.start()
+    except KeyboardInterrupt:
+        logger.info("Shutting down gracefully...")
+        db_writer.close()  # Close DB connections
+        mqtt_client.stop()
