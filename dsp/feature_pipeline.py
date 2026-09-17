@@ -7,7 +7,13 @@ from fft_processor import (
     create_fft_feature_row,
     get_selected_axes,
 )
+
+from signal_conditioning import (
+    apply_bandpass_filter,
+)
+
 from windowing import (
+    SAMPLING_RATE_HZ,
     create_windows,
     validate_dataframe,
 )
@@ -65,15 +71,29 @@ def process_csv_file(file_path, axis_mode):
 
     Why:
     - Keep processing for one recording session isolated.
+    - Apply continuous bandpass filtering before windowing.
     - Allow the pipeline to continue if another file fails.
     """
 
-    df = pd.read_csv(file_path)
+    df = pd.read_csv(
+        file_path
+    )
 
     label = validate_dataframe(
         df,
         file_path,
     )
+
+    # Apply continuous bandpass filtering before windowing.
+    for column_name in [
+        "accX_raw",
+        "accY_raw",
+        "accZ_raw",
+    ]:
+        df[column_name] = apply_bandpass_filter(
+            df[column_name].values,
+            SAMPLING_RATE_HZ,
+        )
 
     selected_axes = get_selected_axes(
         axis_mode
@@ -131,12 +151,18 @@ def run_pipeline(
     - Feature engineering report CSV.
 
     Why:
-    - Run validation, windowing, and FFT processing
-      across all recording files in one command.
+    - Run validation, bandpass filtering,
+      windowing, and FFT processing across
+      all recording files in one command.
     """
 
-    input_folder = Path(input_folder)
-    output_folder = Path(output_folder)
+    input_folder = Path(
+        input_folder
+    )
+
+    output_folder = Path(
+        output_folder
+    )
 
     if not input_folder.exists():
         raise FileNotFoundError(
