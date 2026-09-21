@@ -1,8 +1,7 @@
 ### First Design of the System:
 
-Results:
+Results: 49% accuracy on testing dataset.
+Why?
 
-- Accuracy on testing dataset: ~49%
-  Diagnosis:
-- One possible reason is that I mix healthy data (on the floor and on the table) together -> Low accuracy.
-- Another possible reason is that the ineffective scaling techniques.
+- I mixed training datasets from different environments together without good scaling techniques.
+- I failed to visualize and set thresholds.
