@@ -68,58 +68,21 @@ def parse_arguments():
     return parser.parse_args()
 
 
-def compute_fft(signal):
-    """
-    Input:
-    - One 512-sample conditioned acceleration signal.
-
-    Output:
-    - Frequency bins.
-    - One-sided normalized FFT magnitudes.
-
-    Why:
-    - DC removal reduces static offset in each window.
-    - Hann window reduces spectral leakage.
-    - rFFT keeps only the non-negative frequency spectrum
-      for real-valued acceleration signals.
-    """
-
-    signal = np.asarray(
-        signal,
-        dtype=float,
-    )
-
+def compute_fft(signal, normalize_energy=True):
+    """Compute normalized single-sided FFT magnitudes and frequencies."""
+    signal = np.asarray(signal, dtype=float)
     if len(signal) != WINDOW_SIZE:
-        raise ValueError(
-            f"Invalid signal length: {len(signal)}, "
-            f"expected {WINDOW_SIZE}"
-        )
+        raise ValueError(f"Invalid signal length: {len(signal)}, expected {WINDOW_SIZE}")
 
-    signal = condition_window(
-        signal
-    )
+    windowed_signal = condition_window(signal) * np.hanning(WINDOW_SIZE)
+    fft_values = np.fft.rfft(windowed_signal)
+    frequencies = np.fft.rfftfreq(WINDOW_SIZE, d=1.0 / SAMPLING_RATE_HZ)
+    magnitudes = np.abs(fft_values) / WINDOW_SIZE
 
-    hann_window = np.hanning(
-        WINDOW_SIZE
-    )
-
-    windowed_signal = (
-        signal * hann_window
-    )
-
-    fft_values = np.fft.rfft(
-        windowed_signal
-    )
-
-    frequencies = np.fft.rfftfreq(
-        WINDOW_SIZE,
-        d=1.0 / SAMPLING_RATE_HZ,
-    )
-
-    magnitudes = (
-        np.abs(fft_values)
-        / WINDOW_SIZE
-    )
+    # Per-window L2 normalization
+    if normalize_energy:
+        norm = np.linalg.norm(magnitudes, ord=2) + 1e-8
+        magnitudes = magnitudes / norm
 
     return frequencies, magnitudes
 
