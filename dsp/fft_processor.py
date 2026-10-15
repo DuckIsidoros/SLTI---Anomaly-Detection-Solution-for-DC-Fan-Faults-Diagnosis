@@ -1,6 +1,5 @@
 import argparse
 from pathlib import Path
-
 import numpy as np
 import pandas as pd
 
@@ -20,6 +19,8 @@ from windowing import (
 EXPECTED_FFT_BINS = (WINDOW_SIZE // 2) + 1
 NYQUIST_FREQUENCY_HZ = SAMPLING_RATE_HZ / 2
 FREQUENCY_RESOLUTION_HZ = SAMPLING_RATE_HZ / WINDOW_SIZE
+START_BIN_INDEX = 11
+END_BIN_INDEX = 138
 
 AXIS_COLUMN_MAP = {
     "x": "accX_raw",
@@ -29,19 +30,6 @@ AXIS_COLUMN_MAP = {
 
 
 def parse_arguments():
-    """
-    Input:
-    - Command-line arguments.
-
-    Output:
-    - Input CSV path.
-    - Selected FFT axis mode.
-    - Optional output CSV path.
-
-    Why:
-    - Allow the same FFT pipeline to run in Z-only or XYZ mode.
-    """
-
     parser = argparse.ArgumentParser(
         description="FFT feature engineering for MPU6050 vibration data."
     )
@@ -67,9 +55,8 @@ def parse_arguments():
 
     return parser.parse_args()
 
-
-def compute_fft(signal, normalize_energy=True):
-    """Compute normalized single-sided FFT magnitudes and frequencies."""
+# We turn normalize_energy=False since we move per-window L2 Regularization to notebook
+def compute_fft(signal, normalize_energy=False):
     signal = np.asarray(signal, dtype=float)
     if len(signal) != WINDOW_SIZE:
         raise ValueError(f"Invalid signal length: {len(signal)}, expected {WINDOW_SIZE}")
@@ -79,7 +66,6 @@ def compute_fft(signal, normalize_energy=True):
     frequencies = np.fft.rfftfreq(WINDOW_SIZE, d=1.0 / SAMPLING_RATE_HZ)
     magnitudes = np.abs(fft_values) / WINDOW_SIZE
 
-    # Per-window L2 normalization
     if normalize_energy:
         norm = np.linalg.norm(magnitudes, ord=2) + 1e-8
         magnitudes = magnitudes / norm
@@ -91,19 +77,6 @@ def validate_fft_output(
     frequencies,
     magnitudes,
 ):
-    """
-    Input:
-    - FFT frequency bins.
-    - FFT magnitude values.
-
-    Output:
-    - None.
-
-    Why:
-    - Fail early if FFT dimensions or frequency range
-      do not match the expected 500 Hz / 512-sample setup.
-    """
-
     if len(frequencies) != EXPECTED_FFT_BINS:
         raise ValueError(
             f"Invalid FFT bin count: {len(frequencies)}, "
@@ -137,17 +110,6 @@ def validate_fft_output(
 
 
 def get_selected_axes(axis_mode):
-    """
-    Input:
-    - Axis mode: z or xyz.
-
-    Output:
-    - List of axis names to process.
-
-    Why:
-    - Keep axis selection logic in one place.
-    """
-
     if axis_mode == "z":
         return ["z"]
 
@@ -163,19 +125,6 @@ def create_fft_feature_row(
     window,
     selected_axes,
 ):
-    """
-    Input:
-    - Window metadata.
-    - One 512-sample window.
-    - Selected FFT axes.
-
-    Output:
-    - One feature row containing FFT magnitudes.
-
-    Why:
-    - One row represents one ML-ready vibration window.
-    """
-
     feature_row = {
         "source_file": source_file,
         "window_id": window_id,
@@ -185,12 +134,11 @@ def create_fft_feature_row(
     }
 
     for axis in selected_axes:
-        column_name = (
-            AXIS_COLUMN_MAP[axis]
-        )
+        column_name = AXIS_COLUMN_MAP[axis]
 
         frequencies, magnitudes = compute_fft(
-            window[column_name].values
+            window[column_name].values,
+            normalize_energy=False
         )
 
         validate_fft_output(
@@ -198,12 +146,8 @@ def create_fft_feature_row(
             magnitudes,
         )
 
-        for bin_index, magnitude in enumerate(
-            magnitudes
-        ):
-            feature_row[
-                f"fft_{axis}_{bin_index}"
-            ] = magnitude
+    for bin_index in range(START_BIN_INDEX, END_BIN_INDEX + 1):
+      feature_row[f"fft_{axis}_{bin_index}"] = float(magnitudes[bin_index])
 
     return feature_row
 
@@ -213,21 +157,6 @@ def process_file(
     axis_mode,
     output_path=None,
 ):
-    """
-    Input:
-    - Path to one validated raw CSV file.
-    - FFT axis mode: z or xyz.
-    - Optional output CSV path.
-
-    Output:
-    - FFT feature dataframe.
-    - Saved feature CSV.
-
-    Why:
-    - Apply continuous bandpass filtering before windowing.
-    - Convert raw acceleration data into
-      frequency-domain features for ML.
-    """
 
     input_path = Path(
         input_path
@@ -247,7 +176,6 @@ def process_file(
         input_path,
     )
 
-    # Apply continuous bandpass filtering before windowing.
     for column_name in [
         "accX_raw",
         "accY_raw",
@@ -352,17 +280,6 @@ def process_file(
 
 
 def main():
-    """
-    Input:
-    - CLI arguments.
-
-    Output:
-    - FFT feature CSV.
-
-    Why:
-    - Keep command-line execution separate from
-      reusable FFT processing functions.
-    """
 
     args = parse_arguments()
 

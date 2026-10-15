@@ -18,16 +18,6 @@ REQUIRED_COLUMNS = [
 
 
 def parse_arguments():
-    """
-    Input:
-    - Command-line arguments.
-
-    Output:
-    - Parsed input CSV path.
-
-    Why:
-    - Keep the windowing script reusable for different recording files.
-    """
 
     parser = argparse.ArgumentParser(
         description="Create sliding windows from validated MPU6050 data."
@@ -43,18 +33,6 @@ def parse_arguments():
 
 
 def validate_dataframe(df, file_path):
-    """
-    Input:
-    - Raw sensor dataframe.
-    - Source file path.
-
-    Output:
-    - Normalized session label.
-
-    Why:
-    - Prevent invalid data from entering the windowing stage.
-    - Each recording file must contain one physical condition only.
-    """
 
     missing_columns = [
         column
@@ -110,22 +88,6 @@ def validate_dataframe(df, file_path):
 
 
 def create_windows(df):
-    """
-    Input:
-    - Validated sensor dataframe.
-
-    Output:
-    - Sliding windows containing:
-      window_id,
-      start_index,
-      end_index,
-      window dataframe.
-
-    Why:
-    - FFT requires fixed-length input.
-    - 512 samples provide about 1.024 seconds per window at 500 Hz.
-    - A 256-sample step gives 50% overlap between consecutive windows.
-    """
 
     window_id = 0
 
@@ -151,17 +113,6 @@ def create_windows(df):
 
 
 def process_file(file_path):
-    """
-    Input:
-    - Path to one validated raw CSV file.
-
-    Output:
-    - List of generated sliding windows.
-
-    Why:
-    - Provide one entry point for loading, validating,
-      and windowing a recording session.
-    """
 
     file_path = Path(file_path)
 
@@ -204,16 +155,6 @@ def process_file(file_path):
 
 
 def main():
-    """
-    Input:
-    - CLI input file path.
-
-    Output:
-    - Windowing summary printed to terminal.
-
-    Why:
-    - Keep script execution separate from reusable functions.
-    """
 
     args = parse_arguments()
 

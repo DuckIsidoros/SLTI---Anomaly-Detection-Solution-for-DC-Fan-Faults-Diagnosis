@@ -1,93 +1,70 @@
 import numpy as np
-from scipy.signal import butter, sosfilt
+from scipy.signal import butter, sosfilt, sosfilt_zi
+from dataclasses import dataclass
+
+DEFAULT_LOW_CUTOFF_HZ = 8.0
+DEFAULT_HIGH_CUTOFF_HZ = 142.0
+DEFAULT_FILTER_ORDER = 4
 
 
-LOW_CUTOFF_HZ = 20.0
-HIGH_CUTOFF_HZ = 240.0
-FILTER_ORDER = 4
+@dataclass(frozen=True)
+class BandpassConfig:
+
+  low_cutoff_hz: float = DEFAULT_LOW_CUTOFF_HZ
+  high_cutoff_hz: float = DEFAULT_HIGH_CUTOFF_HZ
+  order: int = DEFAULT_FILTER_ORDER
 
 
-def remove_dc_offset(signal):
-    """
-    Input:
-    - One acceleration signal window.
+def remove_dc_offset(signal: np.ndarray) -> np.ndarray:
+  signal = np.asarray(signal, dtype=np.float64)
+  return signal - np.mean(signal)
 
-    Output:
-    - Signal with its mean value removed.
 
-    Why:
-    - Remove the DC component caused by gravity,
-      sensor bias, or static orientation.
-    - Reduce the 0 Hz component before FFT.
-    """
+def design_bandpass_sos(
+    sampling_rate_hz: float,
+    config: BandpassConfig = BandpassConfig(),
+) -> np.ndarray:
+  nyquist_hz = sampling_rate_hz / 2.0
 
-    signal = np.asarray(
-        signal,
-        dtype=float,
+  if config.low_cutoff_hz <= 0:
+    raise ValueError(
+        f"Low cutoff ({config.low_cutoff_hz} Hz) must be greater than 0."
+    )
+  if config.high_cutoff_hz >= nyquist_hz:
+    raise ValueError(
+        f"High cutoff ({config.high_cutoff_hz} Hz) must be less than Nyquist"
+        f" ({nyquist_hz} Hz)."
+    )
+  if config.low_cutoff_hz >= config.high_cutoff_hz:
+    raise ValueError(
+        f"Low cutoff ({config.low_cutoff_hz} Hz) must be less than high cutoff"
+        f" ({config.high_cutoff_hz} Hz)."
     )
 
-    return signal - np.mean(signal)
+  low_norm = config.low_cutoff_hz / nyquist_hz
+  high_norm = config.high_cutoff_hz / nyquist_hz
+
+  return butter(
+      config.order,
+      [low_norm, high_norm],
+      btype="bandpass",
+      output="sos",
+  )
 
 
 def apply_bandpass_filter(
-    signal,
-    sampling_rate_hz,
-):
-    """
-    Input:
-    - One continuous acceleration signal.
-    - Sampling rate in Hz.
+    signal: np.ndarray,
+    sampling_rate_hz: float,
+    config: BandpassConfig = BandpassConfig(),
+) -> np.ndarray:
+  signal = np.asarray(signal, dtype=np.float64)
+  sos = design_bandpass_sos(sampling_rate_hz, config)
 
-    Output:
-    - Bandpass-filtered acceleration signal.
+  zi = sosfilt_zi(sos) * signal[0]
+  filtered_signal, _ = sosfilt(sos, signal, zi=zi)
 
-    Why:
-    - Suppress low-frequency motion and high-frequency
-      noise outside the useful vibration range.
-    - Preserve the 20-240 Hz band selected from
-      exploratory spectrum analysis.
-    """
-
-    signal = np.asarray(
-        signal,
-        dtype=float,
-    )
-
-    nyquist_hz = sampling_rate_hz / 2.0
-
-    low_normalized = (
-        LOW_CUTOFF_HZ / nyquist_hz
-    )
-
-    high_normalized = (
-        HIGH_CUTOFF_HZ / nyquist_hz
-    )
-
-    sos = butter(
-        FILTER_ORDER,
-        [low_normalized, high_normalized],
-        btype="bandpass",
-        output="sos",
-    )
-
-    return sosfilt(
-        sos,
-        signal,
-    )
+  return filtered_signal
 
 
-def condition_window(signal):
-    """
-    Input:
-    - One acceleration signal window.
-
-    Output:
-    - Conditioned window signal.
-
-    Why:
-    - Apply window-local preprocessing before FFT.
-    """
-
-    signal = remove_dc_offset(signal)
-
-    return signal
+def condition_window(signal: np.ndarray) -> np.ndarray:
+  return remove_dc_offset(signal)
