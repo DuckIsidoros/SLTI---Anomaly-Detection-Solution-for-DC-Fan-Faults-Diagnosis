@@ -59,6 +59,7 @@ def load_and_tag(file_path: Path, env: str, fault: str, axis: str) -> pd.DataFra
     print(f"[PASS] {file_path.name:<25} | Env: {env:<5} | Fault: {fault:<11} | Windows: {len(df)}")
     return df
 
+# Split the original data of healthy into training and testing.
 def split_recording_block(df: pd.DataFrame, test_frac: float = 0.20):
     total_windows = len(df)
     n_test = max(1, int(round(total_windows * test_frac)))
@@ -69,7 +70,7 @@ def split_recording_block(df: pd.DataFrame, test_frac: float = 0.20):
 
     return train_part, test_part
 
-
+# Splitting dataset by shuffling training dataset and merge the left healthy dataset with abnormal data
 def split_dataset(
     input_dir: Path, axis: str, test_frac: float = 0.20, seed: int = 42
 ):
@@ -100,14 +101,14 @@ def split_dataset(
             train_splits.append(train_part)
             test_healthy_splits.append(test_part)
 
-    # Shuffle rows within training set ONLY (to randomize batches during model training)
+    # Shuffle data within training dataset only for training
     train_df = (
         pd.concat(train_splits, ignore_index=True)
         .sample(frac=1.0, random_state=seed)
         .reset_index(drop=True)
     )
 
-    # Combine healthy test slices with abnormal files
+    # Combine the left data of healthy dataset with abnormal data to form test file
     test_df = (
         pd.concat(test_healthy_splits + abnormal_dfs, ignore_index=True)
         .sample(frac=1.0, random_state=seed)
