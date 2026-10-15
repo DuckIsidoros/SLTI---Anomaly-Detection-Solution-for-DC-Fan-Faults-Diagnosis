@@ -20,18 +20,6 @@ from windowing import (
 
 
 def parse_arguments():
-    """
-    Input:
-    - Command-line arguments.
-
-    Output:
-    - Input dataset folder.
-    - Selected FFT axis mode.
-    - Output folder.
-
-    Why:
-    - Allow one command to run the complete feature engineering pipeline.
-    """
 
     parser = argparse.ArgumentParser(
         description="Complete MPU6050 feature engineering pipeline."
@@ -58,81 +46,86 @@ def parse_arguments():
 
     return parser.parse_args()
 
+# Extract information from the files' names
+def extract_metadata_from_filename(filename: str) -> dict:
+  name_lower = filename.lower()
 
+  env = "floor" if "floor" in name_lower else "table"
+  env_floor = 1 if env == "floor" else 0
+  env_table = 1 if env == "table" else 0
+
+  if "healthy" in name_lower:
+    fault_type = "normal"
+  elif "imbalance" in name_lower:
+    fault_type = "imbalanced"
+  elif "obstruction" in name_lower:
+    fault_type = "obstruction"
+  else:
+    fault_type = "normal"
+
+  is_abnormal = 0 if fault_type == "normal" else 1
+
+  return {
+      "env": env,
+      "env_floor": env_floor,
+      "env_table": env_table,
+      "fault_type": fault_type,
+      "is_abnormal": is_abnormal,
+  }
+
+# Process FFT and add labels
 def process_csv_file(file_path, axis_mode):
-    """
-    Input:
-    - One validated raw CSV file.
-    - Selected FFT axis mode.
+  file_path = Path(file_path)
+  df = pd.read_csv(file_path)
 
-    Output:
-    - List of FFT feature rows.
-    - File processing report row.
+  label = validate_dataframe(
+      df,
+      file_path,
+  )
 
-    Why:
-    - Keep processing for one recording session isolated.
-    - Apply continuous bandpass filtering before windowing.
-    - Allow the pipeline to continue if another file fails.
-    """
-
-    df = pd.read_csv(
-        file_path
+  for column_name in [
+      "accX_raw",
+      "accY_raw",
+      "accZ_raw",
+  ]:
+    df[column_name] = apply_bandpass_filter(
+        df[column_name].values,
+        SAMPLING_RATE_HZ,
     )
 
-    label = validate_dataframe(
-        df,
-        file_path,
+  selected_axes = get_selected_axes(axis_mode)
+
+  metadata = extract_metadata_from_filename(file_path.name)
+
+  feature_rows = []
+
+  for window_id, start_index, end_index, window in create_windows(df):
+    feature_row = create_fft_feature_row(
+        source_file=file_path.name,
+        window_id=window_id,
+        start_index=start_index,
+        end_index=end_index,
+        label=label,
+        window=window,
+        selected_axes=selected_axes,
     )
 
-    # Apply continuous bandpass filtering before windowing.
-    for column_name in [
-        "accX_raw",
-        "accY_raw",
-        "accZ_raw",
-    ]:
-        df[column_name] = apply_bandpass_filter(
-            df[column_name].values,
-            SAMPLING_RATE_HZ,
-        )
+    feature_row.update(metadata)
 
-    selected_axes = get_selected_axes(
-        axis_mode
-    )
+    feature_rows.append(feature_row)
 
-    feature_rows = []
+  report_row = {
+      "source_file": file_path.name,
+      "label": metadata["fault_type"],
+      "env": metadata["env"],
+      "axis_mode": axis_mode,
+      "total_samples": len(df),
+      "total_windows": len(feature_rows),
+      "status": "PASS",
+      "reason": "valid",
+  }
 
-    for (
-        window_id,
-        start_index,
-        end_index,
-        window,
-    ) in create_windows(df):
-
-        feature_row = create_fft_feature_row(
-            source_file=file_path.name,
-            window_id=window_id,
-            start_index=start_index,
-            end_index=end_index,
-            label=label,
-            window=window,
-            selected_axes=selected_axes,
-        )
-
-        feature_rows.append(
-            feature_row
-        )
-
-    report_row = {
-        "source_file": file_path.name,
-        "label": label,
-        "axis_mode": axis_mode,
-        "total_samples": len(df),
-        "total_windows": len(feature_rows),
-        "status": "PASS",
-        "reason": "valid",
-    }
-
-    return feature_rows, report_row
+  return feature_rows, report_row
 
 
 def run_pipeline(
@@ -140,21 +133,6 @@ def run_pipeline(
     axis_mode,
     output_folder,
 ):
-    """
-    Input:
-    - Dataset folder.
-    - FFT axis mode.
-    - Output folder.
-
-    Output:
-    - Combined FFT feature CSV.
-    - Feature engineering report CSV.
-
-    Why:
-    - Run validation, bandpass filtering,
-      windowing, and FFT processing across
-      all recording files in one command.
-    """
 
     input_folder = Path(
         input_folder
@@ -289,18 +267,6 @@ def run_pipeline(
 
 
 def main():
-    """
-    Input:
-    - CLI arguments.
-
-    Output:
-    - Combined feature dataset.
-    - Processing report.
-
-    Why:
-    - Provide one command for the complete
-      feature engineering workflow.
-    """
 
     args = parse_arguments()
 
