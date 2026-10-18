@@ -2,321 +2,214 @@
 #include <math.h>
 #include <arduinoFFT.h>
 
-constexpr int SOS_SECTIONS = 4;
-constexpr int AXIS_COUNT = 3;
-constexpr float EPSILON = 1e-8f;
-
-constexpr float THRESHOLD_ENV_FLOOR = 0.000691f;
-constexpr float THRESHOLD_ENV_TABLE = 0.000582f;
-
-struct SosSection
+namespace
 {
-    float b0;
-    float b1;
-    float b2;
-    float a1;
-    float a2;
+    // We use an epsilon constant to prevent division by zero in L2 normalization.
+    constexpr float EPSILON = 1e-8f;
 
-    float z1;
-    float z2;
-};
-
-const float SOS_COEFFICIENTS[SOS_SECTIONS][5] = {
-    {0.60894463271567f,
-     -1.21788926543134f,
-     0.60894463271567f,
-     -1.570650306303734f,
-     0.623033341607531f},
-    {1.0f,
-     2.0f,
-     1.0f,
-     1.775855808209344f,
-     0.790363620107327f},
-    {1.0f,
-     -2.0f,
-     1.0f,
-     -1.7703242211039167f,
-     0.828011828639938f},
-    {1.0f,
-     2.0f,
-     1.0f,
-     1.894330930650549f,
-     0.909455814866532f}};
-
-SosSection sosFilter[AXIS_COUNT][SOS_SECTIONS];
-
-void resetBandpassState()
-{
-    /*
-    Input:
-    - None.
-
-    Output:
-    - Reset filter state for X, Y, and Z axes.
-
-    Why:
-    - Each acceleration axis must maintain
-      independent continuous filter state.
-    */
-
-    for (int axis = 0; axis < AXIS_COUNT; axis++)
+    // Single biquad second-order section state and coefficients.
+    struct SosSection
     {
-        for (int section = 0; section < SOS_SECTIONS; section++)
+        float b0, b1, b2;
+        float a1, a2;
+        float z1, z2;
+    };
+
+    // Scipy butter(4, [8.0/250.0, 142.0/250.0], btype='bandpass', output='sos') coefficients.
+    const float SOS_COEFFICIENTS[SOS_SECTIONS][5] = {
+        {0.116955502223359f, 0.233911004446717f, 0.116955502223359f, 0.149367269803975f, 0.052075387490515f},
+        {1.0f, 2.0f, 1.0f, 0.299550026103775f, 0.482684337652456f},
+        {1.0f, -2.0f, 1.0f, -1.810596432474866f, 0.821218831019077f},
+        {1.0f, -2.0f, 1.0f, -1.920315409929951f, 0.930266028775419f}};
+
+    SosSection sosFilter[AXIS_COUNT][SOS_SECTIONS];
+
+    // symmetric hannwindow lookup table.
+    float hannTable[WINDOW_SIZE];
+
+    // single-precision buffers for arduinoFFT.
+    float fftRealBuffer[WINDOW_SIZE];
+    float fftImagBuffer[WINDOW_SIZE];
+
+    // float template enables sqrtf/cosf paths.
+    ArduinoFFT<float> FFT(fftRealBuffer, fftImagBuffer, WINDOW_SIZE, SAMPLING_RATE_HZ);
+
+    // To normalize an extracted axis slice using root compression and per-window L2 norm.
+    void normalizeAxisSlice(const float *magnitude, float *outputSlice)
+    {
+        float sumSquares = 0.0f;
+        for (int i = 0; i < FEATURE_COUNT; i++)
         {
+            const float mag = fmaxf(magnitude[FEATURE_START_BIN + i], 0.0f);
+            const float rootVal = sqrtf(mag);
+            outputSlice[i] = rootVal;
+            sumSquares += rootVal * rootVal;
+        }
 
-            sosFilter[axis][section].b0 =
-                SOS_COEFFICIENTS[section][0];
-
-            sosFilter[axis][section].b1 =
-                SOS_COEFFICIENTS[section][1];
-
-            sosFilter[axis][section].b2 =
-                SOS_COEFFICIENTS[section][2];
-
-            sosFilter[axis][section].a1 =
-                SOS_COEFFICIENTS[section][3];
-
-            sosFilter[axis][section].a2 =
-                SOS_COEFFICIENTS[section][4];
-
-            sosFilter[axis][section].z1 = 0.0f;
-            sosFilter[axis][section].z2 = 0.0f;
+        const float invNorm = 1.0f / (sqrtf(sumSquares) + EPSILON);
+        for (int i = 0; i < FEATURE_COUNT; i++)
+        {
+            outputSlice[i] *= invNorm;
         }
     }
 }
 
-float applyBandpassSample(
-    float input,
-    Axis axis)
+#ifdef __cplusplus
+extern "C"
 {
-    /*
-    Input:
-    - One acceleration sample.
-    - Axis identifier.
+#endif
 
-    Output:
-    - Bandpass-filtered sample.
-
-    Why:
-    - Keep independent continuous filter states
-      for X, Y, and Z acceleration channels.
-    */
-
-    float value = input;
-
-    for (int i = 0; i < SOS_SECTIONS; i++)
+    // To precompute the symmetric Hann window table and initialize filter states.
+    void initDsp(void)
     {
-        SosSection &section =
-            sosFilter[axis][i];
-
-        float output =
-            section.b0 * value + section.z1;
-
-        section.z1 =
-            section.b1 * value - section.a1 * output + section.z2;
-
-        section.z2 =
-            section.b2 * value - section.a2 * output;
-
-        value = output;
+        resetBandpassState();
+        const float factor = 2.0f * static_cast<float>(PI) / static_cast<float>(WINDOW_SIZE - 1);
+        for (size_t i = 0; i < WINDOW_SIZE; i++)
+        {
+            hannTable[i] = 0.5f - 0.5f * cosf(static_cast<float>(i) * factor);
+        }
     }
 
-    return value;
-}
-void removeDcOffset(
-    float *signal,
-    size_t length)
-{
-    /*
-    Input:
-    - Signal window.
-    - Number of samples.
-
-    Output:
-    - Signal with its mean value removed.
-
-    Why:
-    - Remove the DC component before applying
-      the Hann window and FFT.
-    */
-
-    if (signal == nullptr || length == 0)
+    // To clear the delay lines (z1, z2) for all filter sections.
+    void resetBandpassState(void)
     {
-        return;
+        for (int axis = 0; axis < AXIS_COUNT; axis++)
+        {
+            for (int sec = 0; sec < SOS_SECTIONS; sec++)
+            {
+                sosFilter[axis][sec].b0 = SOS_COEFFICIENTS[sec][0];
+                sosFilter[axis][sec].b1 = SOS_COEFFICIENTS[sec][1];
+                sosFilter[axis][sec].b2 = SOS_COEFFICIENTS[sec][2];
+                sosFilter[axis][sec].a1 = SOS_COEFFICIENTS[sec][3];
+                sosFilter[axis][sec].a2 = SOS_COEFFICIENTS[sec][4];
+                sosFilter[axis][sec].z1 = 0.0f;
+                sosFilter[axis][sec].z2 = 0.0f;
+            }
+        }
     }
 
-    float mean = 0.0f;
-
-    for (size_t i = 0; i < length; i++)
+    // To appliy transposed direct form II biquad filtering.
+    float applyBandpassSample(float input, Axis axis)
     {
-        mean += signal[i];
+        if (axis < 0 || axis >= AXIS_COUNT)
+        {
+            return input;
+        }
+
+        float value = input;
+        for (int i = 0; i < SOS_SECTIONS; i++)
+        {
+            SosSection &sec = sosFilter[axis][i];
+            const float output = sec.b0 * value + sec.z1;
+            sec.z1 = sec.b1 * value - sec.a1 * output + sec.z2;
+            sec.z2 = sec.b2 * value - sec.a2 * output;
+            value = output;
+        }
+
+        return value;
     }
 
-    mean /= static_cast<float>(length);
-
-    for (size_t i = 0; i < length; i++)
+    // To compute and subtract the mean of the input signal array in place.
+    void removeDcOffset(float *signal, size_t length)
     {
-        signal[i] -= mean;
-    }
-}
+        if (signal == nullptr || length == 0)
+        {
+            return;
+        }
 
-void applyHannWindow(
-    float *signal,
-    size_t length)
-{
-    /*
-    Input:
-    - Signal window.
-    - Number of samples.
+        float sum = 0.0f;
+        for (size_t i = 0; i < length; i++)
+        {
+            sum += signal[i];
+        }
 
-    Output:
-    - Signal multiplied by a Hann window.
-
-    Why:
-    - Reduce spectral leakage before FFT.
-    */
-
-    if (signal == nullptr || length <= 1)
-    {
-        return;
+        const float mean = sum / static_cast<float>(length);
+        for (size_t i = 0; i < length; i++)
+        {
+            signal[i] -= mean;
+        }
     }
 
-    for (size_t i = 0; i < length; i++)
+    // To multiply the input signal array by the precomputed Hann table.
+    void applyHannWindow(float *signal, size_t length)
     {
+        if (signal == nullptr || length != WINDOW_SIZE)
+        {
+            return;
+        }
 
-        float hann =
-            0.5f - 0.5f * cosf(
-                              2.0f * PI * i / static_cast<float>(length - 1));
-
-        signal[i] *= hann;
-    }
-}
-void computeFFTMagnitude(
-    float *signal,
-    float *magnitude,
-    size_t length)
-{
-    /*
-    Input:
-    - Time-domain signal window.
-    - Output magnitude buffer.
-    - Number of samples.
-
-    Output:
-    - One-sided FFT magnitude spectrum.
-
-    Why:
-    - Convert the time-domain vibration signal
-      into frequency-domain features for the model.
-    */
-
-    if (
-        signal == nullptr ||
-        magnitude == nullptr ||
-        length != WINDOW_SIZE)
-    {
-        return;
+        for (size_t i = 0; i < WINDOW_SIZE; i++)
+        {
+            signal[i] *= hannTable[i];
+        }
     }
 
-    static double realBuffer[WINDOW_SIZE];
-    static double imagBuffer[WINDOW_SIZE];
-
-    for (size_t i = 0; i < length; i++)
+    // To encapsulate DC removal, Hann windowing, forward FFT, and 1/N scaling.
+    void computeFFTMagnitude(const float *signal, float *magnitude, size_t length)
     {
-        realBuffer[i] = static_cast<double>(signal[i]);
-        imagBuffer[i] = 0.0;
-    }
+        if (signal == nullptr || magnitude == nullptr || length != WINDOW_SIZE)
+        {
+            return;
+        }
 
-    ArduinoFFT<double> FFT(
-        realBuffer,
-        imagBuffer,
-        WINDOW_SIZE,
-        SAMPLING_RATE_HZ);
+        float sum = 0.0f;
+        for (size_t i = 0; i < WINDOW_SIZE; i++)
+        {
+            sum += signal[i];
+        }
+        const float mean = sum / static_cast<float>(WINDOW_SIZE);
 
-    FFT.compute(FFTDirection::Forward);
+        for (size_t i = 0; i < WINDOW_SIZE; i++)
+        {
+            // float multiply — no double cast, no double propagation
+            fftRealBuffer[i] = (signal[i] - mean) * hannTable[i];
+            fftImagBuffer[i] = 0.0f;
+        }
+
+#if defined(ARDUINOFFT_LIB_VERSION) || defined(FFTDirection)
+        FFT.compute(FFTDirection::Forward);
+        FFT.complexToMagnitude();
+#else
+    FFT.compute(FFT_FORWARD);
     FFT.complexToMagnitude();
+#endif
 
-    for (int i = 0; i < FFT_BINS; i++)
-    {
-        magnitude[i] =
-            static_cast<float>(realBuffer[i] / WINDOW_SIZE);
+        const float invN = 1.0f / static_cast<float>(WINDOW_SIZE);
+        for (int i = 0; i < FFT_BINS; i++)
+        {
+            magnitude[i] = fftRealBuffer[i] * invN;
+        }
     }
+
+    // To prepare data for model input.
+    void prepareModelInput(
+        const float *magnitudeX,
+        const float *magnitudeY,
+        const float *magnitudeZ,
+        float *modelInput)
+    {
+        if (magnitudeX == nullptr || magnitudeY == nullptr || magnitudeZ == nullptr || modelInput == nullptr)
+        {
+            return;
+        }
+
+        normalizeAxisSlice(magnitudeX, &modelInput[0 * FEATURE_COUNT]);
+        normalizeAxisSlice(magnitudeY, &modelInput[1 * FEATURE_COUNT]);
+        normalizeAxisSlice(magnitudeZ, &modelInput[2 * FEATURE_COUNT]);
+    }
+
+    // encode one-hot for the environment.
+    void prepareConditionVector(Environment env, float *conditionOutput)
+    {
+        if (conditionOutput == nullptr)
+        {
+            return;
+        }
+
+        conditionOutput[0] = (env == ENV_FLOOR) ? 1.0f : 0.0f;
+        conditionOutput[1] = (env == ENV_TABLE) ? 1.0f : 0.0f;
+    }
+
+#ifdef __cplusplus
 }
-
-void prepareConditionVector(Environment env, float *conditionOutput)
-{
-    if (!conditionOutput)
-        return;
-
-    conditionOutput[0] = (env == ENV_FLOOR) ? 1.0f : 0.0f;
-    conditionOutput[1] = (env == ENV_TABLE) ? 1.0f : 0.0f;
-}
-
-void prepareModelInput(
-    const float *magnitudeX,
-    const float *magnitudeY,
-    const float *magnitudeZ,
-    float *modelInput)
-{
-    /*
-    Input:
-    - FFT magnitude of X, Y, and Z axes.
-    - Output model input buffer.
-
-    Output:
-    - 128 x 3 normalized model features.
-
-    Why:
-    - Match the preprocessing used during model training:
-      FFT bins 11..138 -> sqrt -> per-axis L2 normalization.
-    */
-
-    if (
-        magnitudeX == nullptr ||
-        magnitudeY == nullptr ||
-        magnitudeZ == nullptr ||
-        modelInput == nullptr)
-    {
-        return;
-    }
-
-    float featureX[FEATURE_COUNT];
-    float featureY[FEATURE_COUNT];
-    float featureZ[FEATURE_COUNT];
-
-    float normX = 0.0f;
-    float normY = 0.0f;
-    float normZ = 0.0f;
-
-    // Extract bins 11..138 and apply root compression
-    for (int i = 0; i < FEATURE_COUNT; i++)
-    {
-        int bin = FEATURE_START_BIN + i;
-
-        featureX[i] =
-            sqrtf(fmaxf(magnitudeX[bin], 0.0f));
-
-        featureY[i] =
-            sqrtf(fmaxf(magnitudeY[bin], 0.0f));
-
-        featureZ[i] =
-            sqrtf(fmaxf(magnitudeZ[bin], 0.0f));
-
-        normX += featureX[i] * featureX[i];
-        normY += featureY[i] * featureY[i];
-        normZ += featureZ[i] * featureZ[i];
-    }
-
-    // Calculate per-axis L2 norm for optimization later
-    const float invNormX = 1.0f / (sqrtf(normX) + EPSILON);
-    const float invNormY = 1.0f / (sqrtf(normY) + EPSILON);
-    const float invNormZ = 1.0f / (sqrtf(normZ) + EPSILON);
-
-    // I fix this to match the architecture of our model:
-    for (int i = 0; i < FEATURE_COUNT; i++)
-    {
-        modelInput[0 * FEATURE_COUNT + i] = featureX[i] * invNormX;
-        modelInput[1 * FEATURE_COUNT + i] = featureY[i] * invNormY;
-        modelInput[2 * FEATURE_COUNT + i] = featureZ[i] * invNormZ;
-    }
-}
+#endif
