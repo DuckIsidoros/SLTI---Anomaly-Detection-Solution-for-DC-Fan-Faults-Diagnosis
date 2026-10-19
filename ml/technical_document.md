@@ -171,3 +171,11 @@ Why do we have to transforms the 1D tensors (B, 3, 128) into 2D tensors (B, 1, 1
 
 Quantization schema: $$q = \text{clip}\left(\left\lfloor \frac{x}{S} \right\rceil + Z, -128, 127\right)$$
 Neural network activations have dynamic ranges that cannot be determined by inspecting weights alone. A subset of normal operational data (150–200 training windows) is fed through the model. The converter observes min/max activation ranges at every layer to compute precise scale ($S$) and zero-point ($Z$) parameters.
+
+## 6. Discussion:
+
+**The choice between Dense MLP Autoencoder and 1D CNN Conditional Autoencoder:**
+
+Initially, we tended to develop dense MLP autoencoder model but it requires more dsp engineering techniques so we shifted to CNN model for better generalization.
+We don't prefer dense MLP autoencoder because it demands heavy and sophisticated dsp engineering pipeline for learning meaningful features. Since we're computer science students, developing dsp engineering pipeline is not a good path for us. Even though SRAM for dense MLP autoencoder model is probably smaller, we believe that CNN is better choice since it can learn features from FFT spectrum effectively despite more consuming SRAM.
+Moreover, 1D CNN shares kernels capturing local harmonic patterns and tolerate slight peak shifts.
