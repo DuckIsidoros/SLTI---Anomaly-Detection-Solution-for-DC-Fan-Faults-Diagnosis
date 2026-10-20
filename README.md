@@ -37,8 +37,8 @@ Real-time, unsupervised vibration anomaly detection on an ESP32-WROOM-32 using a
 
 ## Prerequisites & Hardware Pinout
 
-- **Python Environment:** Python $\ge 3.10$ with `numpy`, `scipy`, `pandas`, `matplotlib`, `torch`, `tensorflow`[cite: 1].
-- **Edge Hardware:** ESP32-WROOM-32 (520 KB SRAM, 4 MB Flash) + InvenSense MPU-6050[cite: 1].
+- **Python Environment:** Python $\ge 3.10$ with `numpy`, `scipy`, `pandas`, `matplotlib`, `torch`, `tensorflow`.
+- **Edge Hardware:** ESP32-WROOM-32 (520 KB SRAM, 4 MB Flash) + InvenSense MPU-6050.
 
 | MPU-6050 Pin  | ESP32 Pin     | Protocol / Notes                                                                                    |
 | :------------ | :------------ | :-------------------------------------------------------------------------------------------------- |
@@ -70,11 +70,6 @@ Open `ml/adam-experience.ipynb` to run Teacher-Student Relational Knowledge Dist
 2. Set the mounting condition constant in `main.ino` (`ENV_TABLE` or `ENV_FLOOR`)[cite: 1].
 3. Compile and flash to the ESP32, then monitor real-time calibration and anomaly telemetry at `115200` baud:
 
-```text
-[CALIBRATION] 100/100 | MSE=0.000412 | Threshold(99th)=0.000845
-[MONITORING]  MSE=0.002910 | Votes=10/20 | STATUS=ANOMALY_ALARM_LATCHED
-```
-
 ## MQTT Telemetry Interface (ISA-95 / UNS)
 
 Base topic path: `factory/plant_01/workshop_a/line_02/pump_01/edge_node`[cite: 1]
@@ -95,4 +90,4 @@ Base topic path: `factory/plant_01/workshop_a/line_02/pump_01/edge_node`[cite: 1
 
 ## License
 
-Code is licensed under the [Apache License 2.0](LICENSE)[cite: 1]. Vibration dataset files in `data/` are licensed under [CC BY 4.0](data/LICENSE)[cite: 1].
+Code is licensed under the [Apache License 2.0](LICENSE). Vibration dataset files in `data/` are licensed under [CC BY 4.0](data/LICENSE).
