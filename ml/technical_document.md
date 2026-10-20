@@ -1,185 +1,205 @@
-# Introduction: Edge tinyML vibration anomaly detection pipeline
+# Edge TinyML Vibration Anomaly Detection Pipeline
 
-## 0. Weight and Biases Links:
+## 1. Executive Summary & Problem Formulation
 
-- View run at: https://wandb.ai/duckisidoros-vietnamese-german-university/TinyML-Driven%20Predictive%20Maintenance%20for%20DC%20Fans%20Using%20ESP32%20and%20FFT%20Vibration%20Analysis/runs/1dzxfccb
+Rotating industrial equipment (e.g., DC cooling fans, motors) requires automated predictive maintenance to eliminate manual inspection overhead and prevent catastrophic mechanical failure. Conventional vibration monitoring often relies on high-power computing or cloud telemetry, which introduces bandwidth, latency, and hardware cost barriers.
 
-## 1. Executive summary & problem formulation:
+This document specifies an end-to-end TinyML vibration anomaly detection pipeline deployed on resource-constrained microcontrollers (ESP32-WROOM-32). The model detects mechanical anomalies (blade imbalance, physical obstruction) from 3-axis Fast Fourier Transform (FFT) vibration signatures. To address domain shift caused by varying mounting surfaces (e.g., floor vs. table), we implement a **Conditional 1D-CNN Autoencoder (C-AE)** trained via **Relational Knowledge Distillation (RKD)**, followed by structured pruning and full INT8 post-training quantization.
 
-### Problem statement:
+### Project Artifacts & Tracking
 
-Rotating machines have become common in both daily and industry, especially in mechanical industry. In industry, fault diagnosis is usually inefficient since the schedule is fixed and maintaining engineers need to check every single machine even though they may be normal/healthy. To solve this inefficient effort, we propose a tinyML solution for fault anomaly detection and diagnosis with reasonable prices.
-This document describes the machine learning architecture for tinyML model, deployed on Edge later. Initially, we implement an 1D-CNN Autoencoder architecture but it has limited accuracy on testing dataset (containing healthy, imbalance and obstruction). To enhance this issue, we propose conditional autoencoder algorithm for this 1D-CNN Autoencoder to minimize the effects of domain shift. This document will discuss the architecture of our 1D-CNN Conditional Autoencoder.
+- **Weights & Biases Run:** [`student-c-ae-distillation-run-1`](https://wandb.ai/duckisidoros-vietnamese-german-university/TinyML-Driven%20Predictive%20Maintenance%20for%20DC%20Fans%20Using%20ESP32%20and%20FFT%20Vibration%20Analysis/runs/1dzxfccb)
+- **Target Hardware:** Espressif ESP32-WROOM-32 (Xtensa dual-core 32-bit LX6, 520 KB internal SRAM, 4 MB external SPI Flash, no hardware vector extensions, ~200–300 KB available contiguous heap under FreeRTOS)
+- **Deliverables:** Quantized TFLite flatbuffer (`student_esp32_int8.tflite` — **39.38 KB**), Flash-mapped C array header (`model_data.h` — **40,328 bytes**).
 
-## 2. Physical constraints - ESP32-WROOM-32:
+---
 
-The module specifies 520KB internal SRAM. However, FreeRTOS, other things, leave roughly 200-300 KB continuous RAM for model activation buffers. This MCU also lacks of built-in PSRAM. The flash is 4MB.
-Since this module is old, it lacks dedicated neural vector instructions.
+## 2. Evaluation Metrics Summary
 
-## 3. Final Metrics:
+Evaluated on an independent test dataset of **2,102 samples** containing healthy operation, mechanical imbalance, and external airflow obstruction across multiple mounting domains (`env_floor`, `env_table`):
 
-- The accuracy after training: 99.57%
-- The precision after training: 0.9923
-- The F1-Score after training: 0.9962
-- The recall after training: 100%
+| Pipeline Stage                  | Model Size               | Accuracy | Precision | Recall  | F1-Score | ROC-AUC |
+| :------------------------------ | :----------------------- | :------- | :-------- | :------ | :------- | :------ |
+| **PyTorch Student C-AE (FP32)** | 86.92 KB (`.pth`)        | 99.71%   | 99.49%    | 100.00% | 0.9974   | 1.0000  |
+| **Pruned Student C-AE (FP32)**  | 86.99 KB (`.pth`)        | 99.90%   | 99.83%    | 100.00% | 0.9991   | 1.0000  |
+| **Quantized INT8 TFLite**       | **39.38 KB** (`.tflite`) | 99.86%   | 99.77%    | 100.00% | 0.9988   | 1.0000  |
 
-# Challenges:
+- **Threshold Formulation:** Recalibrated 99.0th percentile of healthy validation reconstruction errors ($e(x, c)$) per environment:
+  - `ENV_FLOOR`: $\tau_{\text{floor}} = 0.000589$ (FP32)
+  - `ENV_TABLE`: $\tau_{\text{table}} = 0.000591$ (FP32)
 
-- Domain shift is the main problem despite the fact that our fan just has one state for the speed. Here are some main volatile variables of this project:
-  - Mounting: The surface, where we place our fan on, affects the FFT signal significantly. This is primarily driven by the different characteristics of distinct environments. For example, a dense surface can absorb a small amount of vibration whereas a undense environment transmits its vibration to the fan, causing resonance. To give you more metaphors, a healthy state in one environment can be detected as imbalance in another environment due to the environmental mismatch.
-    => In this project, we collect data from 2 different floors and 2 different tables. Adding many environments can make the latent space work unreliably (Area Segmentation for Different Environment).
-  - Electrical instability: Household power grids are not always stable. The power can go up or down depending on the number of users, the quality of the transmitting devices.
-    => We propose adding Gaussian Noise while training and also implement specialized data augumentation algorithm to minimize overfitting of the model.
-  - The essen of autoencoder algorithms: Unlike supervised learning, autoencoder cannot see the fault data to extract distinguished features between environment. Because of that, overfitting is the major problem with training since autoencode algorithms just see the healthy data only.
-    => We propose intentional noising algorithms, specialized data augumentation algorithm, and conditional autoencoder algorithm for our project.
+---
 
-## 4. Machine learning pipeline:
+## 3. Data Processing & Noise Robustness
 
-### Scaling techniques & Overfitting-prevent techniques:
+### Signal Representation
 
-- Unlike normal problems, we don't use StandardScaler() because:
-  - Magnitude or Spectrogram are volatile through orders of magnitude (from 10^{-6} to 10^3). If we use this, the model will learn these dominant signals and skip the others. To give you some details why this is critical, even in the same environment, 2 pieces of data can have different distribution of spectrogram due to domain shift.
-    -> If the model learns healthy means "big energy" from bin 30-32, it will fail at real environment since the dominant energy can be shifted between bins.
-  - Another reason is that applying StandardScaler() will force small energy distribution to ~0, making them invisible for model to learn.
+- **Raw Input:** Tri-axial accelerometer FFT bins ($X, Y, Z$) spanning bins 11 to 138 (128 discrete frequency bins per axis $\to 384$ total features).
+- **Conditioning Vector ($c$):** 2-element one-hot vector indicating mounting context: $[c_{\text{floor}}, c_{\text{table}}]$.
+- **Tensor Dimensions:** $(B, 3, 128)$.
 
-- The proposed scaling and processing data methods: Root compression and per-window L2 regularization:
-  - We use root compression to stabilize dynamic range and prevent noise over-amplification in ML pipelines. It compresses dominant high-amplitude spectral peaks -> Prevents gradient explosion from dominant resonant peaks and overfitting based on dominant peaks.
-  - Per-window L2 Regularization normalizes local frame energy, caps transient spikes, forces invariance to loudness. It clamps high-energy impulse spikes (clicks, onsets), preventing activation outliers and gradient instability in early layers. It also prevents overfitting to loudness shifts and distance changes.
+### Normalization Pipeline
 
-- We also apply Gaussian Denoising Algorithm to prevent overfitting. It will add small noise to force model to learn meaningful features rather than learning following identical functions.
-- We also design a spectral masking algorithm for forcing models to learn while some bins are hidden. Here is the algorithm:
+1. **Root Compression:** Replaces standard logarithmic or z-score transforms:
+   $$x_{\text{root}} = \sqrt{\max(x_{\text{raw}}, 0)}$$
+   _Justification:_ Vibration spectral magnitudes fluctuate over several orders of magnitude ($10^{-6}$ to $10^{3}$). Root compression dampens high-amplitude resonant peaks without collapsing small-energy harmonic bins to zero, preventing gradient explosion while retaining harmonic sidebands.
+2. **Per-Window $L_2$ Normalization:** Applied along the 128-bin frequency axis for each axis independently:
+   $$x_{\text{norm}} = \frac{x_{\text{root}}}{\Vert{}x_{\text{root}}\Vert{}_2 + \epsilon}, \quad \epsilon = 10^{-8}$$
+   _Justification:_ Invariant to baseline shifts in global vibration intensity (loudness shifts, sensor distance discrepancies).
 
-1. For each batch, there is 50% that 8 bins will be hidden.
-2. We hide some bins intentionally (not exceed the bin 128th) to force model to learn without these bins.
+### Training Data Augmentation
 
-### Formulation of 1D CNN conditional Autoencoder:
+- **Gaussian Noise Layer:** Additive white Gaussian noise $\mathcal{N}(0, \sigma^2)$ with $\sigma = 0.05$ injected during training forward passes to break identity mappings.
+- **Spectral Masking:** Random contiguous frequency masking applied with probability $p = 0.5$ per sample:
+  - Random mask width $w \in [1, 8]$ bins.
+  - Random start index $s \in [0, 128 - w]$.
+  - Channels $X, Y, Z$ at $[s : s + w]$ are zeroed out.
+  - Forces the autoencoder to reconstruct missing harmonic components from adjacent spatial and cross-axis correlations.
 
-Input tensor format: (B, 3, 128), with 128 FFT bins per axis.
-Conditioning vector: (B, 2). I design one-hot encoder for "env*floor" and "env_table".
-MSE: $$\mathcal{L}*{\text{rec}} = \frac{1}{B \cdot C \cdot W} \sum*{b=1}^{B} \sum*{i=1}^{C} \sum*{j=1}^{W} (x*{b,i,j} - \hat{x}\_{b,i,j})^2$$
-Anomaly evaluation score: $$e(x, c) = \frac{1}{3 \times 128} \sum_{i=1}^{3} \sum_{j=1}^{128} (x_{i,j} - \hat{x}_{i,j})^2$$
-Threshold trigger:
+---
 
-- 1 (Anomaly) if e(x, c) > threshold(c)
-- 0 (Normal) if e(x, c) < threshold (c)
+## 4. Model Architectures & Knowledge Distillation
 
-! Why do we just care about the right side of the threshold? Because as the chart in the notebook, imbalanced and obstruction faults appear on the right.
-! You can find out there are 2 thresholds for these 2 environments. We will implement dynamic thresholds to prevent domain shift in the document of edge inference.
+### 4.1 Teacher Model Architecture (Capacity: Latent Dim = 32)
 
-### ML Technique:
+Designed to extract global harmonic representations across wide receptive fields:
 
-In this project, we use the Relational Knowledge Distillation to extract meaningful features from teacher model to student model. Here are the architectures of the 2 models:
+- **Input:** $x \in \mathbb{R}^{B \times 3 \times 128}$, $c \in \mathbb{R}^{B \times 2}$
+- **Encoder:**
+  - $\text{Conv1D}(3 \to 32, k=5, p=2) \to \text{ReLU}$
+  - $\text{Conv1D}(32 \to 64, k=3, \text{dilation}=4, p=4) \to \text{ReLU}$
+  - $\text{Conv1D}(64 \to 64, k=3, \text{dilation}=8, p=8) \to \text{ReLU}$
+  - $\text{AdaptiveAvgPool1D}(8) \to \text{Flatten} \to \text{feat} \in \mathbb{R}^{B \times 512}$
+- **Latent Bottleneck:**
+  - $[\text{feat}, c] \in \mathbb{R}^{B \times 514} \to \text{Linear}(514 \to 32) \to z_T \in \mathbb{R}^{B \times 32}$
+- **Decoder:**
+  - $[z_T, c] \in \mathbb{R}^{B \times 34} \to \text{Linear}(34 \to 512) \to \text{Reshape}(B, 64, 8)$
+  - $\text{Upsample}(\times 8 \to 64) \to \text{Conv1D}(64 \to 32, k=3, p=1) \to \text{ReLU}$
+  - $\text{Upsample}(\times 2 \to 128) \to \text{Conv1D}(32 \to 3, k=3, p=1) \to \hat{x}_T \in \mathbb{R}^{B \times 3 \times 128}$
 
-#### Teacher model architure:
+---
 
-Encoder & Latent:
-$x \ (B, 3, L)$ $\rightarrow$ Conv1d(32) + ReLU $\rightarrow$ Conv1d(64, d=4) + ReLU $\rightarrow$ Conv1d(64, d=8) + ReLU $\rightarrow$ AdaptiveAvgPool1d(8) $\rightarrow$ Flatten $\rightarrow$ feat $(B, 512)$
-$[feat, c] \ (B, 514)$ $\rightarrow$ Linear(514, 32) $\rightarrow$ latent $(B, 32)$
+### 4.2 Student Model Architecture (ESP32-Targeted: Latent Dim = 16)
 
-Decoder & Output:
-$[latent, c] \ (B, 34)$ $\rightarrow$ Linear(34, 512) $\rightarrow$ Reshape $(B, 64, 8)$$(B, 64, 8)$ $\rightarrow$ Upsample(L // 2) $\rightarrow$ Conv1d(32) + ReLU $\rightarrow$ Upsample(L) $\rightarrow$ Conv1d(3) $\rightarrow$ reconstruction $(B, 3, L)$
+Optimized for low-latency memory execution with reduced channels and pooled spatial widths:
 
-#### Student model architure:
+```text
+Input Tensor (B, 3, 128)
+ │
+ ├──> Conv1D(3 -> 16, k=5, pad=2) + BatchNorm1D(16) + ReLU
+ ├──> Conv1D(16 -> 32, k=3, pad=1) + BatchNorm1D(32) + ReLU
+ ├──> MaxPool1D(kernel=2, stride=2)                     --> (B, 32, 64)
+ ├──> Conv1D(32 -> 32, k=3, pad=1) + ReLU
+ ├──> MaxPool1D(kernel=2, stride=2)                     --> (B, 32, 32)
+ ├──> Conv1D(32 -> 8, k=1) + ReLU [Channel Bottleneck]  --> (B, 8, 32)
+ ├──> Flatten                                          --> (B, 256)
+ │
+ ├──> Concat with Condition c (B, 2)                   --> (B, 258)
+ ├──> Dense Linear(258 -> 16)                           --> Latent z_S (B, 16)
+ │
+ ├──> Concat with Condition c (B, 2)                   --> (B, 18)
+ ├──> Dense Linear(18 -> 256)                          --> (B, 256)
+ ├──> Reshape(8, 32)                                   --> (B, 8, 32)
+ ├──> Conv1D(8 -> 32, k=1) + ReLU [Channel Expansion]   --> (B, 32, 32)
+ ├──> Upsample(scale=2, nearest)                        --> (B, 32, 64)
+ ├──> Conv1D(32 -> 32, k=3, pad=1) + ReLU
+ ├──> Upsample(scale=2, nearest)                        --> (B, 32, 128)
+ ├──> Conv1D(32 -> 16, k=3, pad=1) + ReLU
+ └──> Conv1D(16 -> 3, k=3, pad=1)                      --> Output x_rec (B, 3, 128)
+```
 
-**Encoder:**
+---
 
-$$
-x \ (B, 3, L)
-\;\rightarrow\; \text{Conv1d}(16) + \text{BN} + \text{ReLU}
-\;\rightarrow\; \text{Conv1d}(32) + \text{BN} + \text{ReLU}
-\;\rightarrow\; \text{MaxPool1d}(2)
-\;\rightarrow\; \text{Conv1d}(32) + \text{ReLU}
-\;\rightarrow\; \text{MaxPool1d}(2)
-\;\rightarrow\; \text{Flatten}
-\;\rightarrow\; \text{feat} \ (B, 32 \times \lfloor L/4 \rfloor)
-$$
+### 4.3 Relational Knowledge Distillation (RKD) Objective
 
-$$
-[\text{feat}, c]
-\;\rightarrow\; \text{Linear}\left(\left(32 \cdot \frac{L}{4}\right) + 2,\ 16\right)
-\;\rightarrow\; \text{latent} \ (B, 16)
-$$
+Instead of pointwise feature mimicry (which overconstrains a small student model), RKD transfers the geometric manifold topology of the teacher's latent embeddings:
 
-**Decoder & Output:**
+**Distance-wise Relational Loss ($\mathcal{L}_{\text{Rkd-Dist}}$):**  
+For latent batch embeddings $E = [e_1, \dots, e_N]^\top$, pairwise Euclidean distances $D_{ij} = \Vert{}e_i - e_j\Vert{}_2$ are normalized by the batch mean pairwise distance $\mu$ to ensure scale invariance:
+$$\hat{D}_{ij} = \frac{D_{ij}}{\frac{1}{N^2 - N} \sum_{i \ne j} D_{ij} + \epsilon}$$
+$$\mathcal{L}_{\text{Rkd-Dist}} = \frac{1}{N^2} \sum_{i=1}^N \sum_{j=1}^N \ell_{\delta}\left(\hat{D}^S_{ij} - \hat{D}^T_{ij}\right) \quad (\ell_\delta = \text{Smooth } L_1)$$
 
-$$
-[\text{latent}, c]
-\;\rightarrow\; \text{Linear}\left(18,\ 32 \cdot \frac{L}{4}\right)
-\;\rightarrow\; \text{Reshape} \ (B, 32, \lfloor L/4 \rfloor)
-$$
+**Angle-wise Relational Loss ($\mathcal{L}_{\text{Rkd-Angle}}$):**  
+Preserves high-order structural relations across sample triplets $(e_j, e_i, e_k)$ anchored at $e_i$:
+$$A_{jik} = \left\langle \frac{e_j - e_i}{\Vert{}e_j - e_i\Vert{}_2}, \; \frac{e_k - e_i}{\Vert{}e_k - e_i\Vert{}_2} \right\rangle$$
+$$\mathcal{L}_{\text{Rkd-Angle}} = \frac{1}{N^3} \sum_{i=1}^N \sum_{j=1}^N \sum_{k=1}^N \ell_{\delta}\left(A^S_{jik} - A^T_{jik}\right)$$
 
-$$
-(B, 32, \lfloor L/4 \rfloor)
-\;\rightarrow\; \text{ConvTranspose1d}(32, s=2) + \text{ReLU}
-\;\rightarrow\; \text{ConvTranspose1d}(16, s=2) + \text{ReLU}
-\;\rightarrow\; \text{Conv1d}(3)
-\;\rightarrow\; \text{rec} \ (B, 3, L)
-$$
+**Composite Student Training Loss:**
+$$\mathcal{L}_{\text{total}} = \mathcal{L}_{\text{MSE}}(s_{\text{rec}}(\tilde{x}, c), x) + \mathcal{L}_{\text{Rkd-Dist}}(z_S, z_T) + 2.0 \cdot \mathcal{L}_{\text{Rkd-Angle}}(z_S, z_T)$$
 
-#### RKD Loss Formula:
+Reconstruction loss is evaluated on spectrally masked inputs ($\tilde{x}$), while distillation losses are evaluated on clean inputs ($x$).
 
-We learn this technique from a Git repo and implement it according the paper: https://arxiv.org/abs/1904.05068
+**Training Hyperparameters:** AdamW ($\text{lr} = 10^{-3}$, $\beta = (0.9, 0.999)$, $\text{weight decay} = 10^{-2}$ on 2D weights; no decay on biases/norms), Cosine Annealing scheduler ($T_{\max}=300$, $\eta_{\min}=10^{-5}$), gradient clipping at $\text{max\_norm} = 5.0$. Early stopping triggered at Epoch 230 (best validation reconstruction loss: 0.00033).
 
-### 1. Distance-wise Relational Loss:
+---
 
-Given a mini-batch of latent vectors $E = [e_1, e_2, \dots, e_N]^\top \in \mathbb{R}^{N \times d}$, pairwise Euclidean distances are computed efficiently using matrix multiplication:
+## 5. Model Compression & Edge Deployment
 
-$$
-D\_{ij} = \psi(e_i, e_j) = \sqrt{\max\left(\Vert{}e_i\Vert{}\_2^2 + \Vert{}e_j\Vert{}\_2^2 - 2 \langle e_i, e_j \rangle, \; \epsilon\right)}
-$$
+### 5.1 Magnitude-Based Structured Pruning
 
-To make the metric scale-invariant across different latent spaces, distances are normalized by the average distance of all strictly positive pairs:
+- **Strategy:** L1-norm unstructured pruning targeting convolutional layers (`enc.0`, `enc.3`, `enc.7`).
+- **Schedule:** 5 consecutive rounds, pruning 6% of target weights per round followed by 8 fine-tuning epochs per round ($\text{lr} = 10^{-4}$) maintaining the full RKD distillation loss.
+- **Sparsity Progression:**
+  - Round 1: 6.0% Sparsity | Val MSE: 0.000325
+  - Round 2: 11.6% Sparsity | Val MSE: 0.000327
+  - Round 3: 16.9% Sparsity | Val MSE: 0.000327
+  - Round 4: 21.9% Sparsity | Val MSE: 0.000324
+  - Round 5: 26.6% Sparsity | Val MSE: 0.000327
 
-$$
-\mu = \frac{1}{\vert{}\mathcal{X}_{(2)}\vert{}} \sum_{(i, j) \in \mathcal{X}_{(2)}} D_{ij}, \quad \hat{D}_{ij} = \frac{D_{ij}}{\mu + \epsilon_{\text{scale}}}
-$$
+The pruned student model achieved 99.90% Accuracy and 0.9991 F1-Score on the evaluation set. Pruning masks were folded directly into weights via `prune.remove()`.
 
-The distance loss enforces relative geometric proximity between the student ($\hat{D}^S$) and teacher ($\hat{D}^T$) embeddings using the Huber / Smooth $L_1$ loss ($\ell_\delta$):
-$$\mathcal{L}_{\text{Rkd-Dist}} = \frac{1}{N^2} \sum_{i=1}^N \sum_{j=1}^N \ell_{\delta}\left(\hat{D}^S_{ij} - \hat{D}^T_{ij}\right)$$
+---
 
-### 2. Angle-wise Relational Loss ($\mathcal{L}_{\text{Rkd-Angle}}$)
+### 5.2 2D Tensor Mapping for TensorFlow Lite for Microcontrollers (TFLM)
 
-While distances capture pairwise proximity, angles preserve higher-order local topology across triplets $(e_j, e_i, e_k)$ anchored at anchor node $e_i$. The cosine of the angle $\angle(e_j, e_i, e_k)$ is formulated as:
+TFLM kernel support on microcontrollers is heavily optimized for 2D operations (`CONV_2D`, `MAX_POOL_2D`). Direct 1D convolutions frequently trigger runtime errors or force dynamic tensor allocations (`EXPAND_DIMS`, `STRIDED_SLICE`).
 
-$$
-\cos \theta_{jik} = \left\langle \frac{e_j - e_i}{\Vert{}e_j - e_i\Vert{}_2}, \; \frac{e_k - e_i}{\Vert{}e_k - e_i\Vert{}_2} \right\rangle
-$$
+- **Transformation:** Input signals are mapped to 2D tensors with a dummy spatial height dimension:
+  $$(B, 3, 128) \longrightarrow (B, 1, 128, 3) \quad (\text{Batch}, \text{Height}=1, \text{Width}=128, \text{Channels}=3)$$
+- **1D Kernels as 2D Kernels:** 1D Conv kernels of size $K$ become 2D kernels of shape $(1, K)$.
+- **Zero-Allocation 2x Upsampling:** Replaced unsupported `ResizeNearestNeighbor` and dynamic `EXPAND_DIMS`/`TILE` ops by combining static Reshape and Concatenation:
 
-The angle loss penalizes discrepancies between the teacher's and student's angular orientations across all sample triplets:
+```python
+def upsample_2x_width(tensor, width, channels):
+    t_expanded = tf.keras.layers.Reshape((1, width, 1, channels))(tensor)
+    t_dup = tf.keras.layers.Concatenate(axis=3)([t_expanded, t_expanded])
+    return tf.keras.layers.Reshape((1, 2 * width, channels))(t_dup)
+```
 
-$$
-\mathcal{L}_{\text{Rkd-Angle}} = \frac{1}{N^3} \sum_{i=1}^N \sum_{j=1}^N \sum_{k=1}^N \ell_{\delta}\left(A^S_{i, j, k} - A^T_{i, j, k}\right)
-$$
+- **Parity Test:** PyTorch vs. Keras 2D graph output divergence confirmed:
+  - Reconstruction Max Absolute Error: **$1.52 \times 10^{-6}$**
+  - Latent Max Absolute Error: **$1.19 \times 10^{-7}$**
 
-## 5. Model compressing techniques for edge inference:
+---
 
-For a limited-resources hardware such as ESP32-WROOM-32, model compressing techniques are compulsory.
+### 5.3 Post-Training Quantization (INT8)
 
-### Magnitude-Based Pruning:
+- **Quantization Scheme:** Symmetric weight, asymmetric activation quantization mapping FP32 values $x \in [\alpha, \beta]$ to INT8 $q \in [-128, 127]$:
+  $$q = \text{clip}\left(\left\lfloor \frac{x}{S} \right\rceil + Z, -128, 127\right)$$
+- **Calibration:** 200 normal training samples fed through the model to record dynamic activation ranges and lock per-layer scale ($S$) and zero-point ($Z$) constants.
+- **Model Storage:**
+  - Flash Model Binary (`student_esp32_int8.tflite`): **39.38 KB**
+  - C Array (`model_data.h`): **40,328 bytes** declared with `alignas(16)`:
 
-- I implement iterative pruning L1-norm pruning. To ensure the stability, we prune in 5 rounds with 6% of neurons being cut off for each round.
-- For each round, we have to fine-tune for 8 epochs to maintain the accuracy.
-- During fine-tuning, we still conduct calculating RKD distance loss and angle loss at every training iteration to ensure the consistency.
+    ```c
+    #ifndef MODEL_DATA_H_
+    #define MODEL_DATA_H_
+    #include <stdint.h>
 
-### The transformation tricks:
+    const unsigned int g_model_len = 40328;
+    alignas(16) const unsigned char g_model[] = {
+        0x1c, 0x00, 0x00, 0x00, 0x54, 0x46, 0x4c, 0x33, ...
+    };
+    #endif
+    ```
 
-Why do we have to transforms the 1D tensors (B, 3, 128) into 2D tensors (B, 1, 128, 3)?
+  - `alignas(16)` enables the ESP32 memory-management unit to execute model weights directly from external SPI Flash via memory-mapped caching, requiring **0 KB of internal SRAM** for static weight storage.
 
-- Reason:
-  - Problem 1: In TFLM library, they mainly support for vision and 2D convolution. Designing 1D operators raise so many bugs.
-  - Problem 2: We want to avoid unreliable dynamic reshape.
-  - By setting height to 1 and treating width as the temporal/frequency dimension, 2x upsampling was constructed purely using Reshape and Concatenate ((1, W, 1, C) duplicated and concatenated along axis 3 $\to$ (1, 2W, C)), both of which are supported natively in INT8 with zero dynamic allocation.
-- Solution: we transform 1D signals into a 2D representation with a dummy spatial dimention (height = 1).
+---
 
-### Post-training quantization to INT8:
+### 5.4 TFLM Operator Compliance Verification
 
-Quantization schema: $$q = \text{clip}\left(\left\lfloor \frac{x}{S} \right\rceil + Z, -128, 127\right)$$
-Neural network activations have dynamic ranges that cannot be determined by inspecting weights alone. A subset of normal operational data (150–200 training windows) is fed through the model. The converter observes min/max activation ranges at every layer to compute precise scale ($S$) and zero-point ($Z$) parameters.
+To guarantee deterministic execution on the ESP32 micro-tensor arena without falling back to software emulation or memory faults, all operations were verified against the strict TFLM operator allowlist:
 
-## 6. Discussion:
-
-**The choice between Dense MLP Autoencoder and 1D CNN Conditional Autoencoder:**
-
-Initially, we tended to develop dense MLP autoencoder model but it requires more dsp engineering techniques so we shifted to CNN model for better generalization.
-We don't prefer dense MLP autoencoder because it demands heavy and sophisticated dsp engineering pipeline for learning meaningful features. Since we're computer science students, developing dsp engineering pipeline is not a good path for us. Even though SRAM for dense MLP autoencoder model is probably smaller, we believe that CNN is better choice since it can learn features from FFT spectrum effectively despite more consuming SRAM.
-Moreover, 1D CNN shares kernels capturing local harmonic patterns and tolerate slight peak shifts.
+- **Verified Present Operators:** `CONV_2D`, `MAX_POOL_2D`, `FULLY_CONNECTED`, `RESHAPE`, `CONCATENATION`, `QUANTIZE`.
+- **Forbidden Operators Banned:** Zero instances of `EXPAND_DIMS`, `TILE`, `SHAPE`, `PACK`, or `STRIDED_SLICE`.
