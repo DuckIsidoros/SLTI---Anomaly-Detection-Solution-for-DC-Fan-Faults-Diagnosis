@@ -1,5 +1,9 @@
 # Introduction: Edge tinyML vibration anomaly detection pipeline
 
+## 0. Weight and Biases Links:
+
+- View run at: https://wandb.ai/duckisidoros-vietnamese-german-university/TinyML-Driven%20Predictive%20Maintenance%20for%20DC%20Fans%20Using%20ESP32%20and%20FFT%20Vibration%20Analysis/runs/1dzxfccb
+
 ## 1. Executive summary & problem formulation:
 
 ### Problem statement:
