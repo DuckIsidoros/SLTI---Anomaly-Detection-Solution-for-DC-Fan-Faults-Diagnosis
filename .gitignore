@@ -1,6 +1,66 @@
-.venv/
+# Byte-compiled / optimized / DLL files
 __pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# C / C++ / Embedded binaries & build files
+*.o
+*.obj
+*.hex
+*.elf
+*.bin
+build/
+.arduino/
+
+# Virtual Environments
+.venv/
+venv/
+ENV/
+env/
+.env/
+
+# Environment variables & credentials / keys
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.csr
+*.srl
+
+# Node & Frontend dependencies / build
+node_modules/
+dist/
+dist-ssr/
+*.local
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Mosquitto runtime data & logs
+dashboard/mosquitto/data/
+dashboard/mosquitto/log/
+*.log
+
+# Project-specific datasets and generated artifacts
 dataset/
 dataset.zip
 arduino_serial_data_*.csv
 dsp/output/
+
+# Agent, Tooling & Graphify artifacts
+.agents/
+.aider-desk/
+graphify-out/
+skills-lock.json
+
+# Operating System & Editor Files
+.DS_Store
+Thumbs.db
+ehthumbs.db
+.vscode/
+.idea/
+*.swp
+*~

@@ -1,0 +1,28 @@
+# ==============================================================================
+# Eclipse Mosquitto Access Control List (ACL)
+# IEC 62443 Topic Scoping & Zero-Trust Access
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# 1. Edge Devices: Strictly constrained to their specific plant equipment subtree
+# ------------------------------------------------------------------------------
+user edge_node_01
+# Allow publishing high-frequency telemetry, alerts, and heartbeats for cnc_05
+topic write v1/plant_hcm/line_01/cnc_05/+/+
+# Allow publishing Last Will and Testament (LWT) & birth certificates
+topic write v1/plant_hcm/line_01/cnc_05/status
+
+# ------------------------------------------------------------------------------
+# 2. Web Application / Dashboard: Read-only access to alert topics
+# ------------------------------------------------------------------------------
+user dashboard_user
+# Real-time incident visualization across all assets (4 single-level wildcards)
+topic read v1/+/+/+/+/alert
+
+# ------------------------------------------------------------------------------
+# 3. Backend Enterprise Service: Full ingestion pipeline access
+# ------------------------------------------------------------------------------
+user backend_service
+# Read and write access to all pipeline topics for ingestion & orchestration
+topic readwrite v1/#
+topic readwrite $SYS/#
