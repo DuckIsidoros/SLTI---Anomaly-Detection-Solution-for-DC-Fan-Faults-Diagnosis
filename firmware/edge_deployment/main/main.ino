@@ -5,6 +5,7 @@
 #include "dsp_edge.h"
 #include "window_manager.h"
 #include "model_runner.h"
+#include "mqtt_manager.h"
 
 // Configuration for MPU6050:
 
@@ -70,6 +71,8 @@ namespace
     // I2C failure handling
     constexpr uint32_t I2C_FAILURE_THRESHOLD = 10;
     uint32_t consecutiveI2CFailures = 0;
+    float peakMse = 0.0f;
+    uint32_t lastHeartbeatTime = 0;
 
     bool initMpu6050(void)
     {
@@ -253,12 +256,42 @@ void setup()
     Serial.print(F("Starting Empirical Percentile calibration ("));
     Serial.print(CALIBRATION_WINDOW_COUNT);
     Serial.println(F(" windows)..."));
+
+    if (!initMqtt())
+    {
+        Serial.println(F("[MQTT] Setup warning: MQTT initialization deferred or offline."));
+    }
 }
 
 void loop()
 {
     // await notification from core 0 if a new window is ready.
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+
+    mqttLoop();
+
+    const uint32_t nowMs = millis();
+    if (nowMs - lastHeartbeatTime >= HEARTBEAT_INTERVAL_MS)
+    {
+        lastHeartbeatTime = nowMs;
+        HeartbeatData hb;
+        hb.systemState = (getRunnerState() == STATE_MONITORING) ? "MONITORING" : "CALIBRATING";
+        hb.environment = (currentEnv == ENV_TABLE) ? "ENV_TABLE" : "ENV_FLOOR";
+        hb.uptimeSeconds = nowMs / 1000;
+        hb.isCalibrated = (getRunnerState() == STATE_MONITORING);
+        hb.dynamicThreshold = getDynamicThreshold();
+        hb.calibrationWindows = CALIBRATION_WINDOW_COUNT;
+        hb.i2cConsecutiveFailures = consecutiveI2CFailures;
+        hb.i2cFailureThreshold = I2C_FAILURE_THRESHOLD;
+        hb.mpu6050OdrHz = SAMPLING_RATE_HZ;
+        hb.mpu6050RangeG = 16;
+        hb.mpu6050DlpfHz = 44;
+        hb.freeHeapBytes = ESP.getFreeHeap();
+        hb.minFreeHeapBytes = ESP.getMinFreeHeap();
+        hb.core0Task = "SensorTask";
+        hb.core1Task = "InferenceTask";
+        publishHeartbeat(&hb);
+    }
 
     // start of per-window processing pipeline.
     const uint32_t tSnapshotStart = micros();
@@ -316,6 +349,30 @@ void loop()
         Serial.print(inferenceUs);
         Serial.print(F(" e2e="));
         Serial.println(e2eUs);
+
+        TelemetryData telem;
+        telem.systemState = "CALIBRATING";
+        telem.environment = (currentEnv == ENV_TABLE) ? "ENV_TABLE" : "ENV_FLOOR";
+        telem.isCalibrating = true;
+        telem.calibrationStep = calibrationStepCounter;
+        telem.totalCalibrationSteps = CALIBRATION_WINDOW_COUNT;
+        telem.currentMse = currentMse;
+        telem.dynamicThreshold = 0.0f;
+        telem.isWindowAnomaly = isWindowAnomaly;
+        telem.anomalyCount = 0;
+        telem.windowSpan = ANOMALY_WINDOW_SPAN;
+        telem.triggerThreshold = ANOMALY_COUNT_THRESHOLD;
+        telem.dspUs = dspUs;
+        telem.inferenceUs = inferenceUs;
+        telem.e2eUs = e2eUs;
+        telem.magX = magX;
+        telem.magY = magY;
+        telem.magZ = magZ;
+        telem.startBin = FEATURE_START_BIN;
+        telem.binCount = FEATURE_COUNT;
+        telem.freqStartHz = static_cast<float>(FEATURE_START_BIN) * (500.0f / 512.0f);
+        telem.freqEndHz = static_cast<float>(FEATURE_END_BIN) * (500.0f / 512.0f);
+        publishTelemetry(&telem);
 
         if (stateAfter == STATE_MONITORING)
         {
@@ -375,6 +432,7 @@ void loop()
         if (!alarmActive)
         {
             alarmActive = true;
+            peakMse = currentMse;
 
             const float threshold = getDynamicThreshold();
             Serial.print(F("[MONITORING] MSE: "));
@@ -410,6 +468,35 @@ void loop()
             Serial.print(inferenceUs);
             Serial.print(F(" e2e="));
             Serial.println(e2eUs);
+
+            AlertData alertData;
+            alertData.event = "ALARM_LATCHED";
+            alertData.alarmActive = true;
+            alertData.alarmLatchMs = ALARM_LATCH_MS;
+            alertData.currentMse = currentMse;
+            alertData.peakMse = peakMse;
+            alertData.dynamicThreshold = threshold;
+            alertData.anomalyCount = anomalyCount;
+            alertData.windowSpan = ANOMALY_WINDOW_SPAN;
+            alertData.triggerThreshold = ANOMALY_COUNT_THRESHOLD;
+            alertData.detectionDelayMs = detectionDelayMs;
+            alertData.consecutiveNormalWindows = consecutiveNormalWindows;
+            alertData.resetThresholdWindows = EPISODE_RESET_NORMAL;
+            alertData.architecture = "cAE INT8";
+            alertData.environment = (currentEnv == ENV_TABLE) ? "ENV_TABLE" : "ENV_FLOOR";
+            alertData.latentDim = LATENT_DIM;
+            alertData.latentVector = latentVec;
+            alertData.dspUs = dspUs;
+            alertData.inferenceUs = inferenceUs;
+            alertData.e2eUs = e2eUs;
+            publishAlert(&alertData);
+        }
+        else
+        {
+            if (currentMse > peakMse)
+            {
+                peakMse = currentMse;
+            }
         }
     }
     else
@@ -439,4 +526,28 @@ void loop()
             Serial.println(F(" | Status: Normal"));
         }
     }
+
+    TelemetryData telem;
+    telem.systemState = "MONITORING";
+    telem.environment = (currentEnv == ENV_TABLE) ? "ENV_TABLE" : "ENV_FLOOR";
+    telem.isCalibrating = false;
+    telem.calibrationStep = CALIBRATION_WINDOW_COUNT;
+    telem.totalCalibrationSteps = CALIBRATION_WINDOW_COUNT;
+    telem.currentMse = currentMse;
+    telem.dynamicThreshold = getDynamicThreshold();
+    telem.isWindowAnomaly = isWindowAnomaly;
+    telem.anomalyCount = anomalyCount;
+    telem.windowSpan = ANOMALY_WINDOW_SPAN;
+    telem.triggerThreshold = ANOMALY_COUNT_THRESHOLD;
+    telem.dspUs = dspUs;
+    telem.inferenceUs = inferenceUs;
+    telem.e2eUs = e2eUs;
+    telem.magX = magX;
+    telem.magY = magY;
+    telem.magZ = magZ;
+    telem.startBin = FEATURE_START_BIN;
+    telem.binCount = FEATURE_COUNT;
+    telem.freqStartHz = static_cast<float>(FEATURE_START_BIN) * (500.0f / 512.0f);
+    telem.freqEndHz = static_cast<float>(FEATURE_END_BIN) * (500.0f / 512.0f);
+    publishTelemetry(&telem);
 }
