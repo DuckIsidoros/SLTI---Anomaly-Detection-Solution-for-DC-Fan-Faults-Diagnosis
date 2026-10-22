@@ -1,5 +1,7 @@
 # TinyML Anomaly Detection for DC Fan Fault Diagnosis
 
+**You can find demo with detailed description here:** https://drive.google.com/file/d/1QI8GlU2JwZJyF__oFXcrdoVkMYeguoWw/view?usp=sharing
+
 Real-time, unsupervised vibration anomaly detection on an ESP32-WROOM-32 using an MPU-6050 triaxial accelerometer and an INT8-quantized 1D-CNN Conditional Autoencoder (cAE) to diagnose mechanical faults (imbalance, blade obstruction) across varying mounting surfaces.
 
 ## Architecture & Core Concepts
