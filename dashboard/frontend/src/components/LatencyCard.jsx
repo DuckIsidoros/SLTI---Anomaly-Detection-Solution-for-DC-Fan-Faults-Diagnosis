@@ -1,13 +1,13 @@
 import React from 'react'
 
 export default function LatencyCard({ latency }) {
-  const dsp = latency?.dsp || 1240
-  const inference = latency?.inference || 4850
-  const e2e = latency?.e2e || 6820
+  const dsp = latency?.dsp || 0
+  const inference = latency?.inference || 0
+  const e2e = latency?.e2e || 0
 
-  const dspPct = Math.round((dsp / e2e) * 100) || 18
-  const infPct = Math.round((inference / e2e) * 100) || 71
-  const overheadPct = Math.max(0, 100 - dspPct - infPct)
+  const dspPct = e2e > 0 ? Math.round((dsp / e2e) * 100) : 0
+  const infPct = e2e > 0 ? Math.round((inference / e2e) * 100) : 0
+  const overheadPct = e2e > 0 ? Math.max(0, 100 - dspPct - infPct) : 0
 
   return (
     <div className="card" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>

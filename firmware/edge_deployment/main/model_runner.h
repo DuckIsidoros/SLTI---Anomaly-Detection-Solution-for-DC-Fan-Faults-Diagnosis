@@ -10,9 +10,11 @@
 #define CALIBRATION_WINDOW_COUNT ((size_t)100)
 #define PERCENTILE_INDEX ((size_t)98)
 #define THRESHOLD_BOOST (1.00f)
+#define MIN_THRESHOLD_FLOOR (1e-6f)
 
 // To define tensor arena for static allocation for model inference.
-#define TENSOR_ARENA_SIZE ((size_t)(50 * 1024))
+// shortcut: 32KB static arena fits dram0_0_seg with WiFi/MQTT; increase or move to heap if model grows
+#define TENSOR_ARENA_SIZE ((size_t)(32 * 1024))
 
 #define LATENT_DIM ((size_t)16)
 
@@ -24,6 +26,14 @@ typedef enum
     STATE_MONITORING = 1
 } RunnerState;
 
+typedef enum
+{
+    INFERENCE_OK = 0,
+    INFERENCE_ERR_NOT_INITIALIZED = -1,
+    INFERENCE_ERR_INVALID_INPUT = -2,
+    INFERENCE_ERR_INVOKE_FAILED = -3
+} InferenceStatus;
+
 #ifdef __cplusplus
 extern "C"
 {
@@ -31,14 +41,17 @@ extern "C"
 
     bool initModelRunner(void);
     bool initModelRunnerExplicit(const uint8_t *modelData, size_t modelSize);
+    void setActiveEnvironment(Environment env);
     void resetCalibration(void);
     RunnerState getRunnerState(void);
+    size_t getCalibrationStep(void);
     float getDynamicThreshold(void);
 
-    bool runInference(
+    InferenceStatus runInference(
         const float *modelInput,
         const float *conditionVector,
-        float *outMse);
+        float *outMse,
+        bool *outIsAnomaly);
 
     const int8_t *getLatentVector(void);
 

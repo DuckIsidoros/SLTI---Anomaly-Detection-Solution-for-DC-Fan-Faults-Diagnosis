@@ -81,7 +81,7 @@ Reconstruction MSE Calculation
 
 - **Model Framework**: TensorFlow Lite for Microcontrollers (TFLM).
 - **Model Footprint**: 40,328 bytes FlatBuffer stored in Flash (`model_data.h`).
-- **Tensor Arena**: 50 KB internal SRAM (`alignas(16)`).
+- **Tensor Arena**: 32 KB internal SRAM (`alignas(16)`).
 - **Op Resolver**: `MicroMutableOpResolver<6>` (Conv2D, MaxPool2D, FullyConnected, Reshape, Concatenation, Quantize).
 - **Input Tensors**:
   - `input_x`: INT8, shape `[1, 1, 128, 3]` (transposed from DSP channel-major layout `[3, 128]` to channels-last layout during quantization).
@@ -108,18 +108,18 @@ Reconstruction MSE Calculation
 
 ## 5. Memory Footprint
 
-| Memory Region     | Resource Allocation                                 | Size (Bytes) | Placement              |
-| :---------------- | :-------------------------------------------------- | :----------- | :--------------------- |
-| **Flash**         | TFLM Model Array (`g_model`)                        | 40,328       | `.rodata`              |
-| **Flash**         | Program binary & lookup constants                   | Variable     | `.text` / `.rodata`    |
-| **Internal SRAM** | Tensor Arena (`tensorArena`)                        | 51,200       | `.bss` (align 16)      |
-| **Internal SRAM** | Sensor Ring Buffer (`sampleRing`)                   | 12,288       | `.bss`                 |
-| **Internal SRAM** | Window Snapshot (`windowSnapshot`)                  | 6,144        | `.bss`                 |
-| **Internal SRAM** | FFT Work Buffers (`fftRealBuffer`, `fftImagBuffer`) | 4,096        | `.bss`                 |
-| **Internal SRAM** | Spectrum Magnitudes (`magX`, `magY`, `magZ`)        | 3,084        | `.bss`                 |
-| **Internal SRAM** | Model Input / Condition Buffers                     | 1,544        | `.bss`                 |
-| **Internal SRAM** | TFLM Interpreter Buffer                             | ~200         | `.bss`                 |
-| **Internal SRAM** | Sensor Task FreeRTOS Stack                          | 4,096        | FreeRTOS Heap/Internal |
+| Memory Region     | Resource Allocation                                     | Size (Bytes) | Placement              |
+| :---------------- | :------------------------------------------------------ | :----------- | :--------------------- |
+| **Flash**         | TFLM Model Array (`g_model`)                            | 40,328       | `.rodata`              |
+| **Flash**         | Program binary & lookup constants                       | Variable     | `.text` / `.rodata`    |
+| **Internal SRAM** | Tensor Arena (`tensorArena`)                            | 32,768       | `.bss` (align 16)      |
+| **Internal SRAM** | Sensor Ring Buffer (`sampleRing`)                       | 12,288       | `.bss`                 |
+| **Internal SRAM** | Window Snapshot / FFT Magnitudes (`windowSnapshot`)     | 6,144        | `.bss` (reused)        |
+| **Internal SRAM** | FFT Work Buffers (`fftRealBuffer`, `fftImagBuffer`)     | 4,096        | `.bss`                 |
+| **Internal SRAM** | Shared MQTT JSON Buffer (`s_jsonBuffer`)                | 4,096        | `.bss`                 |
+| **Internal SRAM** | Model Input / Condition Buffers                         | 1,544        | `.bss`                 |
+| **Internal SRAM** | TFLM Interpreter Buffer                                 | ~200         | `.bss`                 |
+| **Internal SRAM** | Sensor Task FreeRTOS Stack                              | 4,096        | FreeRTOS Heap/Internal |
 
 ---
 

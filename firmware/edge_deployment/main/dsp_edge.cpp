@@ -175,7 +175,8 @@ extern "C"
 #endif
 
         const float invN = 1.0f / static_cast<float>(WINDOW_SIZE);
-        for (int i = 0; i < FFT_BINS; i++)
+        // Only bins up to FEATURE_END_BIN are consumed (model input uses bins 11-138).
+        for (int i = 0; i <= FEATURE_END_BIN; i++)
         {
             magnitude[i] = fftRealBuffer[i] * invN;
         }

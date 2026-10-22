@@ -87,6 +87,7 @@ Base topic path: `factory/plant_01/workshop_a/line_02/pump_01/edge_node`
 - **ML & Compression Architecture:** [`ml/technical_document.md`](ml/technical_document.md)
 - **Edge Runtime Specification:** [`firmware/edge_deployment/main/README_edge.md`](firmware/edge_deployment/main/README_edge.md)
 - **MQTT Topic Hierarchy:** [`docs/mqtt-architecture/btopic-hierarchy.md`](docs/mqtt-architecture/btopic-hierarchy.md)
+- **Dashboard and APIs document** [`dashboard/README.md`](dashboard/README.md)
 
 ## License
 
