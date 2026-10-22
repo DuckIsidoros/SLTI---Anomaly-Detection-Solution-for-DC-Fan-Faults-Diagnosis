@@ -22,7 +22,7 @@ Evaluated on an independent test dataset of **2,102 samples** containing healthy
 | :------------------------------ | :----------------------- | :------- | :-------- | :------ | :------- | :------ |
 | **PyTorch Student C-AE (FP32)** | 86.92 KB (`.pth`)        | 99.71%   | 99.49%    | 100.00% | 0.9974   | 1.0000  |
 | **Pruned Student C-AE (FP32)**  | 86.99 KB (`.pth`)        | 99.90%   | 99.83%    | 100.00% | 0.9991   | 1.0000  |
-| **Quantized INT8 TFLite**       | **39.38 KB** (`.tflite`) | 99.86%   | 99.77%    | 100.00% | 0.9988   | 1.0000  |
+| **Quantized INT8 TFLite**       | **39.38 KB** (`.tflite`) | 98.81%   | 100.00%   | 97.86%  | 0.9892   | 1.0000  |
 
 - **Threshold Formulation (These thresholds will be set again in deployment calibration window algorithm):** Recalibrated 99.0th percentile of healthy validation reconstruction errors ($e(x, c)$) per environment:
   - `ENV_FLOOR`: $\tau_{\text{floor}} = 0.000589$ (FP32)
@@ -177,6 +177,9 @@ def upsample_2x_width(tensor, width, channels):
 - **Quantization Scheme:** Symmetric weight, asymmetric activation quantization mapping FP32 values $x \in [\alpha, \beta]$ to INT8 $q \in [-128, 127]$:
   $$q = \text{clip}\left(\left\lfloor \frac{x}{S} \right\rceil + Z, -128, 127\right)$$
 - **Calibration:** 200 normal training samples fed through the model to record dynamic activation ranges and lock per-layer scale ($S$) and zero-point ($Z$) constants.
+- **Recalibrated INT8 Thresholds:** 99.0th percentile validation errors under INT8:
+  - `ENV_FLOOR`: $\tau_{\text{floor}} = 0.000984$
+  - `ENV_TABLE`: $\tau_{\text{table}} = 0.000942$
 - **Model Storage:**
   - Flash Model Binary (`student_esp32_int8.tflite`): **39.38 KB**
   - C Array (`model_data.h`): **40,328 bytes** declared with `alignas(16)`:
