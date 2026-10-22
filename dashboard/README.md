@@ -24,34 +24,43 @@ dashboard/
 ## Quickstart
 
 ### 1. Launch the FastAPI Backend
+
 From the repository root:
+
 ```bash
 python dashboard/run_dashboard.py
 ```
+
 - **Dashboard UI**: [http://localhost:8000](http://localhost:8000)
 - **Interactive Swagger API Docs**: [http://localhost:8000/docs](http://localhost:8000/docs)
 - **Live WebSocket Stream**: `ws://localhost:8000/ws`
 
-*Note: If the Mosquitto broker is offline, the backend automatically initiates a realistic simulation pipeline streaming 128-bin FFT and telemetry at 512 ms intervals so the dashboard functions out-of-the-box.*
+_Note: The dashboard stays in standby mode awaiting edge device connection. Live telemetry, FFT spectrum, and anomaly gauges activate automatically once an edge device (e.g. ESP32 or simulate_edge_node.py) connects and streams data._
 
 ---
 
 ### 2. Frontend Development (Hot-Reloading with Vite)
+
 To develop or customize the frontend live:
+
 ```bash
 cd dashboard/frontend
 npm run dev
 ```
+
 Open [http://localhost:5173](http://localhost:5173). Requests to `/api` and `/ws` are automatically proxied to the FastAPI backend at port 8000.
 
 ---
 
 ### 3. Rebuilding the Frontend Bundle
+
 When modifying the React source code:
+
 ```bash
 cd dashboard/frontend
 npm run build
 ```
+
 Builds the optimized single-page bundle to `dashboard/frontend/dist`, which FastAPI serves directly on `http://localhost:8000/`.
 
 ---

@@ -61,6 +61,8 @@ namespace
     // convert floating-point numbers to int8
     inline int8_t quantizeFloatToInt8(float value, float scale, int32_t zeroPoint)
     {
+        if (!std::isfinite(value))
+            value = 0.0f;
         const int32_t q = static_cast<int32_t>(roundf(value / scale)) + zeroPoint;
         if (q < -128)
             return -128;
@@ -114,7 +116,7 @@ namespace
             std::sort(sortedBuf, sortedBuf + CALIBRATION_WINDOW_COUNT);
 
             const float empiricalPercentile = sortedBuf[PERCENTILE_INDEX];
-            tracker.threshold = empiricalPercentile * THRESHOLD_BOOST;
+            tracker.threshold = std::max(empiricalPercentile * THRESHOLD_BOOST, MIN_THRESHOLD_FLOOR);
             tracker.state = STATE_MONITORING;
         }
     }
@@ -251,6 +253,11 @@ extern "C"
         return initModelRunnerExplicit(g_model, g_model_len);
     }
 
+    void setActiveEnvironment(Environment env)
+    {
+        activeEnvIndex = (env == ENV_TABLE) ? 1 : 0;
+    }
+
     void resetCalibration(void)
     {
         envTrackers[0].state = STATE_CALIBRATING;
@@ -262,8 +269,6 @@ extern "C"
         envTrackers[1].count = 0;
         envTrackers[1].threshold = 0.0f;
         memset(envTrackers[1].samples, 0, sizeof(envTrackers[1].samples));
-
-        activeEnvIndex = 0;
     }
 
     RunnerState getRunnerState(void)
@@ -273,6 +278,11 @@ extern "C"
             return STATE_UNINITIALIZED;
         }
         return envTrackers[activeEnvIndex].state;
+    }
+
+    size_t getCalibrationStep(void)
+    {
+        return envTrackers[activeEnvIndex].count;
     }
 
     float getDynamicThreshold(void)
@@ -289,14 +299,24 @@ extern "C"
         return outputLatentTensor->data.int8;
     }
 
-    bool runInference(
+    InferenceStatus runInference(
         const float *modelInput,
         const float *conditionVector,
-        float *outMse)
+        float *outMse,
+        bool *outIsAnomaly)
     {
-        if (!isRunnerInitialized || modelInput == nullptr || conditionVector == nullptr)
+        if (outIsAnomaly != nullptr)
         {
-            return false;
+            *outIsAnomaly = false;
+        }
+        if (!isRunnerInitialized)
+        {
+            return INFERENCE_ERR_NOT_INITIALIZED;
+        }
+        if (modelInput == nullptr || conditionVector == nullptr ||
+            !std::isfinite(conditionVector[0]) || !std::isfinite(conditionVector[1]))
+        {
+            return INFERENCE_ERR_INVALID_INPUT;
         }
 
         activeEnvIndex = getEnvironmentIndex(conditionVector);
@@ -309,6 +329,10 @@ extern "C"
             for (int c = 0; c < 3; c++)
             {
                 const float val = modelInput[c * 128 + l];
+                if (!std::isfinite(val))
+                {
+                    return INFERENCE_ERR_INVALID_INPUT;
+                }
                 inXData[l * 3 + c] = quantizeFloatToInt8(val, scaleX, zpX);
             }
         }
@@ -322,7 +346,7 @@ extern "C"
         // edge inference of TFLM
         if (interpreter->Invoke() != kTfLiteOk)
         {
-            return false;
+            return INFERENCE_ERR_INVOKE_FAILED;
         }
 
         // To compute MSE
@@ -339,6 +363,10 @@ extern "C"
         }
 
         const float mse = totalSqErr / static_cast<float>(totalElements);
+        if (!std::isfinite(mse) || mse < 0.0f)
+        {
+            return INFERENCE_ERR_INVOKE_FAILED;
+        }
         if (outMse != nullptr)
         {
             *outMse = mse;
@@ -348,10 +376,14 @@ extern "C"
         if (tracker.state == STATE_CALIBRATING)
         {
             updateEmpiricalCalibration(tracker, mse);
-            return false;
+            return INFERENCE_OK;
         }
 
-        return (mse > tracker.threshold);
+        if (outIsAnomaly != nullptr)
+        {
+            *outIsAnomaly = (mse > tracker.threshold);
+        }
+        return INFERENCE_OK;
     }
 
 #ifdef __cplusplus

@@ -12,13 +12,12 @@ namespace
 {
     esp_mqtt_client_handle_t s_mqttClient = nullptr;
     volatile bool s_connected = false;
+    bool s_mqttStarted = false;
     uint32_t s_lastHeartbeatMs = 0;
 
-    // Static buffers in .bss to avoid stack and heap memory pressure
-    char s_telemetryBuffer[8192];
-    char s_alertBuffer[1536];
-    char s_heartbeatBuffer[1024];
-    char s_statusBuffer[256];
+    // Shared static buffer in .bss for Core 1 JSON serialization (max telemetry ~3.5 KB)
+    // shortcut: 4096B shared across sequential Core 1 publishers, guard with mutex if called from multiple tasks
+    char s_jsonBuffer[4096];
     char s_lwtBuffer[256];
 
     void getIso8601Timestamp(char *dest, size_t maxLen)
@@ -179,11 +178,12 @@ namespace
         char ts[32];
         getIso8601Timestamp(ts, sizeof(ts));
 
-        snprintf(s_statusBuffer, sizeof(s_statusBuffer),
+        char statusBuffer[256];
+        snprintf(statusBuffer, sizeof(statusBuffer),
                  "{\"device_id\":\"%s\",\"timestamp\":\"%s\",\"msg_type\":\"status\",\"status\":\"%s\"}",
                  DEVICE_ID, ts, status);
 
-        esp_mqtt_client_publish(s_mqttClient, MQTT_TOPIC_STATUS, s_statusBuffer, 0, MQTT_QOS_STATUS, 1);
+        esp_mqtt_client_publish(s_mqttClient, MQTT_TOPIC_STATUS, statusBuffer, 0, MQTT_QOS_STATUS, 1);
     }
 
     void mqttEventHandler(void *handler_args, esp_event_base_t base, int32_t event_id, void *event_data)
@@ -221,8 +221,11 @@ bool initMqtt(void)
     WiFi.mode(WIFI_STA);
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 
-    // Synchronize network time via NTP for ISO 8601 timestamps
-    configTime(0, 0, "pool.ntp.org", "time.google.com");
+    const uint32_t wifiStartMs = millis();
+    while (WiFi.status() != WL_CONNECTED && (millis() - wifiStartMs) < 10000)
+    {
+        delay(250);
+    }
 
     // Prepare Last Will and Testament (LWT) payload
     char initialTs[32];
@@ -238,6 +241,7 @@ bool initMqtt(void)
 #if MQTT_USE_TLS
     mqtt_cfg.broker.address.transport = MQTT_TRANSPORT_OVER_SSL;
     mqtt_cfg.broker.verification.certificate = ROOT_CA_CERT_PEM;
+    mqtt_cfg.broker.verification.skip_cert_common_name_check = true;
 #else
     mqtt_cfg.broker.address.transport = MQTT_TRANSPORT_OVER_TCP;
 #endif
@@ -250,8 +254,8 @@ bool initMqtt(void)
     mqtt_cfg.session.last_will.msg_len = strlen(s_lwtBuffer);
     mqtt_cfg.session.last_will.qos = MQTT_QOS_STATUS;
     mqtt_cfg.session.last_will.retain = 1;
-    mqtt_cfg.buffer.size = 8192;
-    mqtt_cfg.buffer.out_size = 8192;
+    mqtt_cfg.buffer.size = 4096;
+    mqtt_cfg.buffer.out_size = 4096;
 #else
     esp_mqtt_client_config_t mqtt_cfg;
     memset(&mqtt_cfg, 0, sizeof(mqtt_cfg));
@@ -260,6 +264,7 @@ bool initMqtt(void)
 #if MQTT_USE_TLS
     mqtt_cfg.transport = MQTT_TRANSPORT_OVER_SSL;
     mqtt_cfg.cert_pem = ROOT_CA_CERT_PEM;
+    mqtt_cfg.skip_cert_common_name_check = true;
 #else
     mqtt_cfg.transport = MQTT_TRANSPORT_OVER_TCP;
 #endif
@@ -272,8 +277,8 @@ bool initMqtt(void)
     mqtt_cfg.lwt_msg_len = strlen(s_lwtBuffer);
     mqtt_cfg.lwt_qos = MQTT_QOS_STATUS;
     mqtt_cfg.lwt_retain = 1;
-    mqtt_cfg.buffer_size = 8192;
-    mqtt_cfg.out_buffer_size = 8192;
+    mqtt_cfg.buffer_size = 4096;
+    mqtt_cfg.out_buffer_size = 4096;
 #endif
 
     s_mqttClient = esp_mqtt_client_init(&mqtt_cfg);
@@ -284,22 +289,35 @@ bool initMqtt(void)
     }
 
     esp_mqtt_client_register_event(s_mqttClient, static_cast<esp_mqtt_event_id_t>(ESP_EVENT_ANY_ID), mqttEventHandler, nullptr);
-    esp_err_t startErr = esp_mqtt_client_start(s_mqttClient);
-    if (startErr != ESP_OK)
+
+    if (WiFi.status() != WL_CONNECTED)
     {
-        Serial.print(F("[MQTT] Failed to start MQTT client task, err = "));
-        Serial.println(startErr);
         return false;
     }
 
-    Serial.println(F("[MQTT] Initialized asynchronous MQTT client task."));
-    return true;
+    mqttLoop();
+    return s_mqttStarted;
 }
 
 void mqttLoop(void)
 {
-    // Maintenance loop for non-blocking periodic checks
-    // If WiFi disconnected, WiFi driver reconnects automatically in background
+    // Start NTP and MQTT client task only after Wi-Fi station has acquired an IP route
+    if (!s_mqttStarted && s_mqttClient != nullptr && WiFi.status() == WL_CONNECTED)
+    {
+        Serial.print(F("[WIFI] Connected, IP: "));
+        Serial.println(WiFi.localIP());
+        configTime(0, 0, "pool.ntp.org", "time.google.com");
+
+        esp_err_t startErr = esp_mqtt_client_start(s_mqttClient);
+        if (startErr != ESP_OK)
+        {
+            Serial.print(F("[MQTT] Failed to start MQTT client task, err = "));
+            Serial.println(startErr);
+            return;
+        }
+        s_mqttStarted = true;
+        Serial.println(F("[MQTT] Initialized asynchronous MQTT client task."));
+    }
 }
 
 bool isMqttConnected(void)
@@ -317,7 +335,7 @@ bool publishTelemetry(const TelemetryData *data)
     char ts[32];
     getIso8601Timestamp(ts, sizeof(ts));
 
-    JsonWriter w(s_telemetryBuffer, sizeof(s_telemetryBuffer));
+    JsonWriter w(s_jsonBuffer, sizeof(s_jsonBuffer));
     w.appendFormat("{\"device_id\":\"%s\",\"timestamp\":\"%s\",\"msg_type\":\"telemetry\",\"payload\":{",
                    DEVICE_ID, ts);
     w.appendFormat("\"system_state\":\"%s\",", data->systemState ? data->systemState : "UNKNOWN");
@@ -406,7 +424,7 @@ bool publishAlert(const AlertData *data)
     dtostrf(data->peakMse, 1, 6, peakMseBuf);
     dtostrf(data->dynamicThreshold, 1, 6, threshBuf);
 
-    JsonWriter w(s_alertBuffer, sizeof(s_alertBuffer));
+    JsonWriter w(s_jsonBuffer, sizeof(s_jsonBuffer));
     w.appendFormat("{\"device_id\":\"%s\",\"timestamp\":\"%s\",\"msg_type\":\"alert\",\"payload\":{",
                    DEVICE_ID, ts);
     w.appendFormat("\"event\":\"%s\",\"alarm_active\":%s,\"alarm_latch_ms\":%lu,",
@@ -462,7 +480,7 @@ bool publishHeartbeat(const HeartbeatData *data)
     char threshBuf[24];
     dtostrf(data->dynamicThreshold, 1, 6, threshBuf);
 
-    JsonWriter w(s_heartbeatBuffer, sizeof(s_heartbeatBuffer));
+    JsonWriter w(s_jsonBuffer, sizeof(s_jsonBuffer));
     w.appendFormat("{\"device_id\":\"%s\",\"timestamp\":\"%s\",\"msg_type\":\"heartbeat\",\"payload\":{",
                    DEVICE_ID, ts);
     w.appendFormat("\"system_state\":\"%s\",\"environment\":\"%s\",\"uptime_seconds\":%lu,",

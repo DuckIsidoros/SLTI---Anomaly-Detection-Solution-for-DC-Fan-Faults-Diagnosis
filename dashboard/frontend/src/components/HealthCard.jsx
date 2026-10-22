@@ -4,8 +4,8 @@ export default function HealthCard({ heartbeat }) {
   const hb = heartbeat || {}
   const hw = hb.hardware_health || {}
   const sys = hb.system_resources || {}
-  const freeKb = Math.round((sys.free_heap_bytes || 214528) / 1024)
-  const minKb = Math.round((sys.min_free_heap_bytes || 198400) / 1024)
+  const freeKb = sys.free_heap_bytes !== undefined ? Math.round(sys.free_heap_bytes / 1024) : '--'
+  const minKb = sys.min_free_heap_bytes !== undefined ? Math.round(sys.min_free_heap_bytes / 1024) : '--'
 
   const formatUptime = (sec) => {
     if (!sec) return '0s'
@@ -31,9 +31,9 @@ export default function HealthCard({ heartbeat }) {
         <div style={{ backgroundColor: 'var(--bg-secondary)', padding: '0.65rem', borderRadius: '6px' }}>
           <div style={{ fontSize: '0.68rem', color: 'var(--text-dim)', textTransform: 'uppercase' }}>Internal SRAM Free</div>
           <div style={{ fontSize: '1.2rem', fontWeight: 800, fontFamily: 'var(--font-mono)', color: 'var(--accent-green)' }}>
-            {freeKb} <span style={{ fontSize: '0.7rem' }}>KB</span>
+            {freeKb} {freeKb !== '--' && <span style={{ fontSize: '0.7rem' }}>KB</span>}
           </div>
-          <div style={{ fontSize: '0.7rem', color: 'var(--text-dim)' }}>Low watermark: {minKb} KB</div>
+          <div style={{ fontSize: '0.7rem', color: 'var(--text-dim)' }}>Low watermark: {minKb} {minKb !== '--' && 'KB'}</div>
         </div>
 
         <div style={{ backgroundColor: 'var(--bg-secondary)', padding: '0.65rem', borderRadius: '6px' }}>
@@ -47,18 +47,18 @@ export default function HealthCard({ heartbeat }) {
         <div style={{ backgroundColor: 'var(--bg-secondary)', padding: '0.65rem', borderRadius: '6px' }}>
           <div style={{ fontSize: '0.68rem', color: 'var(--text-dim)', textTransform: 'uppercase' }}>MPU-6050 I2C Bus</div>
           <div style={{ fontSize: '1.05rem', fontWeight: 700, fontFamily: 'var(--font-mono)', color: (hw.i2c_consecutive_failures || 0) === 0 ? 'var(--accent-green)' : 'var(--accent-danger)' }}>
-            {(hw.i2c_consecutive_failures || 0) === 0 ? 'HEALTHY (0 Drop)' : `${hw.i2c_consecutive_failures} Failures`}
+            {hw.i2c_consecutive_failures !== undefined ? ((hw.i2c_consecutive_failures === 0) ? 'HEALTHY (0 Drop)' : `${hw.i2c_consecutive_failures} Failures`) : '--'}
           </div>
-          <div style={{ fontSize: '0.7rem', color: 'var(--text-dim)' }}>ODR: {hw.mpu6050_odr_hz || 500}Hz | &plusmn;{hw.mpu6050_range_g || 16}g</div>
+          <div style={{ fontSize: '0.7rem', color: 'var(--text-dim)' }}>ODR: {hw.mpu6050_odr_hz || '--'}Hz | &plusmn;{hw.mpu6050_range_g || '--'}g</div>
         </div>
 
         <div style={{ backgroundColor: 'var(--bg-secondary)', padding: '0.65rem', borderRadius: '6px' }}>
           <div style={{ fontSize: '0.68rem', color: 'var(--text-dim)', textTransform: 'uppercase' }}>FreeRTOS Tasks</div>
           <div style={{ fontSize: '0.85rem', fontWeight: 700, fontFamily: 'var(--font-mono)', color: 'var(--accent-cyan)' }}>
-            C0: {sys.core0_task || 'SensorTask'}
+            C0: {sys.core0_task || '--'}
           </div>
           <div style={{ fontSize: '0.85rem', fontWeight: 700, fontFamily: 'var(--font-mono)', color: 'var(--accent-blue)' }}>
-            C1: {sys.core1_task || 'InferenceTask'}
+            C1: {sys.core1_task || '--'}
           </div>
         </div>
       </div>

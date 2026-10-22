@@ -6,7 +6,6 @@
 constexpr int SAMPLING_RATE_HZ = 500;
 constexpr int WINDOW_SIZE = 512;
 constexpr int STEP_SIZE = 256;
-constexpr int FFT_BINS = (WINDOW_SIZE / 2) + 1;
 constexpr int FEATURE_START_BIN = 11;
 constexpr int FEATURE_END_BIN = 138;
 constexpr int FEATURE_COUNT = (FEATURE_END_BIN - FEATURE_START_BIN + 1);

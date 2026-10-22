@@ -4,16 +4,16 @@
 
 // Wifi configuration.
 #ifndef WIFI_SSID
-#define WIFI_SSID "YOUR_WIFI_SSID"
+#define WIFI_SSID "iPhone"
 #endif
 
 #ifndef WIFI_PASSWORD
-#define WIFI_PASSWORD "YOUR_WIFI_PASSWORD"
+#define WIFI_PASSWORD "duckiuaiua"
 #endif
 
 // MQTT Broker set up.
 #ifndef MQTT_BROKER_HOST
-#define MQTT_BROKER_HOST "192.168.1.100"
+#define MQTT_BROKER_HOST "172.20.10.2"
 #endif
 
 #ifndef MQTT_BROKER_PORT
@@ -27,15 +27,15 @@
 
 // Credentials configured in dashboard/mosquitto/config/passwd and acl
 #ifndef MQTT_USERNAME
-#define MQTT_USERNAME "edge_node_01"
+#define MQTT_USERNAME "layvoduc"
 #endif
 
 #ifndef MQTT_PASSWORD
-#define MQTT_PASSWORD "EdgePass2026!"
+#define MQTT_PASSWORD "0383969099"
 #endif
 
 #ifndef MQTT_CLIENT_ID
-#define MQTT_CLIENT_ID "esp32_edge_01"
+#define MQTT_CLIENT_ID "edge_node_01"
 #endif
 
 #ifndef DEVICE_ID
@@ -66,7 +66,7 @@
 #define HEARTBEAT_INTERVAL_MS 30000
 
 // Root CA certificate for MQTTS
-static const char ROOT_CA_CERT_PEM[] PROGMEM =
+static const char ROOT_CA_CERT_PEM[] =
     "-----BEGIN CERTIFICATE-----\n"
     "MIIFnTCCA4WgAwIBAgIUJ2die4t9wN4/ETDs4zVvpvUd6I4wDQYJKoZIhvcNAQEL\n"
     "BQAwXjELMAkGA1UEBhMCVk4xDDAKBgNVBAgMA0hDTTESMBAGA1UEBwwJSG9DaGlN\n"

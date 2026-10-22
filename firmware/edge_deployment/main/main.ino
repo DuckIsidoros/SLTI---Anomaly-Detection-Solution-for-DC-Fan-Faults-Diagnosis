@@ -30,21 +30,29 @@ namespace
 
     constexpr uint32_t SAMPLE_PERIOD_US = 2000;
 
-    // Thread-safe snapshot buffer for DSP execution on core 1
+    // Thread-safe snapshot buffer for DSP execution on core 1 (reused in-place for FFT magnitudes)
     float windowSnapshot[AXIS_COUNT][WINDOW_SIZE];
 
     // Notification throttle
     volatile bool windowPending = false;
 
-    // FFT single-sided amplitude spectrum buffers (257 bins per axis)
-    float magX[FFT_BINS];
-    float magY[FFT_BINS];
-    float magZ[FFT_BINS];
-
     float modelInput[MODEL_INPUT_SIZE];
     float conditionVector[2];
 
-    const Environment currentEnv = ENV_TABLE;
+    // User-configurable deployment environment: set to ENV_TABLE or ENV_FLOOR
+    Environment currentEnv = ENV_TABLE;
+
+    inline const char *getEnvName(Environment env)
+    {
+        return (env == ENV_TABLE) ? "ENV_TABLE" : "ENV_FLOOR";
+    }
+
+    void applyEnvironmentConfig(Environment env)
+    {
+        currentEnv = env;
+        setActiveEnvironment(env);
+        prepareConditionVector(env, conditionVector);
+    }
 
     // Alarm latch settings
     constexpr uint32_t ALARM_LATCH_MS = 3000;
@@ -60,7 +68,6 @@ namespace
 
     uint32_t lastAnomalyTimestamp = 0;
     bool alarmActive = false;
-    size_t calibrationStepCounter = 0;
 
     // To reset the saved states if anomalies (caused by users' iteraction rather than real fauls) end.
     constexpr uint32_t EPISODE_RESET_NORMAL = 3;
@@ -70,7 +77,9 @@ namespace
 
     // I2C failure handling
     constexpr uint32_t I2C_FAILURE_THRESHOLD = 10;
-    uint32_t consecutiveI2CFailures = 0;
+    volatile uint32_t consecutiveI2CFailures = 0;
+    volatile bool sensorFaultLatched = false;
+    bool sensorFaultAlertSent = false;
     float peakMse = 0.0f;
     uint32_t lastHeartbeatTime = 0;
 
@@ -158,15 +167,18 @@ namespace
                 {
                     consecutiveI2CFailures = 0;
 
-                    bool windowReady = false;
+                    bool notifyInference = false;
 
                     portENTER_CRITICAL(&windowMux);
-                    windowReady = windowManagerAddSample(ax, ay, az);
-                    portEXIT_CRITICAL(&windowMux);
-
-                    if (windowReady && !windowPending && inferenceTaskHandle != nullptr)
+                    if (windowManagerAddSample(ax, ay, az) && !windowPending && inferenceTaskHandle != nullptr)
                     {
                         windowPending = true;
+                        notifyInference = true;
+                    }
+                    portEXIT_CRITICAL(&windowMux);
+
+                    if (notifyInference)
+                    {
                         xTaskNotifyGive(inferenceTaskHandle);
                     }
                 }
@@ -178,12 +190,16 @@ namespace
 
                     if (consecutiveI2CFailures >= I2C_FAILURE_THRESHOLD)
                     {
-                        Serial.println(F("FATAL: MPU6050 I2C failure threshold reached. Halting system."));
+                        sensorFaultLatched = true;
+                        Serial.println(F("FATAL: MPU6050 I2C failure threshold reached. Halting sensor sampling."));
                         Serial.flush();
+                        if (inferenceTaskHandle != nullptr)
+                        {
+                            xTaskNotifyGive(inferenceTaskHandle);
+                        }
                         while (true)
                         {
-                            delay(1000);
-                            Serial.println(F("System halted due to I2C failure."));
+                            vTaskDelay(pdMS_TO_TICKS(1000));
                         }
                     }
                 }
@@ -224,7 +240,7 @@ void setup()
         }
     }
 
-    prepareConditionVector(currentEnv, conditionVector);
+    applyEnvironmentConfig(currentEnv);
 
     if (!initMpu6050())
     {
@@ -265,18 +281,37 @@ void setup()
 
 void loop()
 {
-    // await notification from core 0 if a new window is ready.
-    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    // await notification from core 0 with bounded timeout so MQTT and heartbeats remain active if sensor stalls
+    const uint32_t notified = ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(1000));
 
     mqttLoop();
+
+    if (sensorFaultLatched && !sensorFaultAlertSent)
+    {
+        sensorFaultAlertSent = true;
+        AlertData faultAlert = {};
+        faultAlert.event = "SENSOR_FAULT";
+        faultAlert.alarmActive = true;
+        faultAlert.alarmLatchMs = ALARM_LATCH_MS;
+        faultAlert.dynamicThreshold = getDynamicThreshold();
+        faultAlert.windowSpan = ANOMALY_WINDOW_SPAN;
+        faultAlert.triggerThreshold = ANOMALY_COUNT_THRESHOLD;
+        faultAlert.resetThresholdWindows = EPISODE_RESET_NORMAL;
+        faultAlert.architecture = "cAE INT8";
+        faultAlert.environment = getEnvName(currentEnv);
+        faultAlert.latentDim = LATENT_DIM;
+        publishAlert(&faultAlert);
+    }
 
     const uint32_t nowMs = millis();
     if (nowMs - lastHeartbeatTime >= HEARTBEAT_INTERVAL_MS)
     {
         lastHeartbeatTime = nowMs;
         HeartbeatData hb;
-        hb.systemState = (getRunnerState() == STATE_MONITORING) ? "MONITORING" : "CALIBRATING";
-        hb.environment = (currentEnv == ENV_TABLE) ? "ENV_TABLE" : "ENV_FLOOR";
+        hb.systemState = sensorFaultLatched
+                             ? "SENSOR_FAULT"
+                             : ((getRunnerState() == STATE_MONITORING) ? "MONITORING" : "CALIBRATING");
+        hb.environment = getEnvName(currentEnv);
         hb.uptimeSeconds = nowMs / 1000;
         hb.isCalibrated = (getRunnerState() == STATE_MONITORING);
         hb.dynamicThreshold = getDynamicThreshold();
@@ -291,6 +326,11 @@ void loop()
         hb.core0Task = "SensorTask";
         hb.core1Task = "InferenceTask";
         publishHeartbeat(&hb);
+    }
+
+    if (notified == 0 || sensorFaultLatched)
+    {
+        return;
     }
 
     // start of per-window processing pipeline.
@@ -312,7 +352,11 @@ void loop()
         return;
     }
 
-    // To apply dsp engineering.
+    // To apply dsp engineering (reuse windowSnapshot in-place; model reads bins 11-138).
+    // shortcut: in-place FFT output aliases the start of windowSnapshot; do not read raw time-series after this
+    float *const magX = windowSnapshot[AXIS_X];
+    float *const magY = windowSnapshot[AXIS_Y];
+    float *const magZ = windowSnapshot[AXIS_Z];
     computeFFTMagnitude(windowSnapshot[AXIS_X], magX, WINDOW_SIZE);
     computeFFTMagnitude(windowSnapshot[AXIS_Y], magY, WINDOW_SIZE);
     computeFFTMagnitude(windowSnapshot[AXIS_Z], magZ, WINDOW_SIZE);
@@ -324,7 +368,14 @@ void loop()
     // To run INT8 Autoencoder inference
     const bool wasCalibrating = (getRunnerState() == STATE_CALIBRATING);
     float currentMse = 0.0f;
-    const bool isWindowAnomaly = runInference(modelInput, conditionVector, &currentMse);
+    bool isWindowAnomaly = false;
+    const InferenceStatus infStatus = runInference(modelInput, conditionVector, &currentMse, &isWindowAnomaly);
+    if (infStatus != INFERENCE_OK)
+    {
+        Serial.print(F("[ERROR] Inference failed with status: "));
+        Serial.println(static_cast<int>(infStatus));
+        return;
+    }
     const RunnerState stateAfter = getRunnerState();
 
     const uint32_t tAfterInference = micros();
@@ -336,9 +387,9 @@ void loop()
 
     if (wasCalibrating)
     {
-        calibrationStepCounter++;
+        const size_t calStep = getCalibrationStep();
         Serial.print(F("[CALIBRATION "));
-        Serial.print(calibrationStepCounter);
+        Serial.print(calStep);
         Serial.print(F("/"));
         Serial.print(CALIBRATION_WINDOW_COUNT);
         Serial.print(F("] MSE: "));
@@ -352,9 +403,9 @@ void loop()
 
         TelemetryData telem;
         telem.systemState = "CALIBRATING";
-        telem.environment = (currentEnv == ENV_TABLE) ? "ENV_TABLE" : "ENV_FLOOR";
+        telem.environment = getEnvName(currentEnv);
         telem.isCalibrating = true;
-        telem.calibrationStep = calibrationStepCounter;
+        telem.calibrationStep = calStep;
         telem.totalCalibrationSteps = CALIBRATION_WINDOW_COUNT;
         telem.currentMse = currentMse;
         telem.dynamicThreshold = 0.0f;
@@ -483,7 +534,7 @@ void loop()
             alertData.consecutiveNormalWindows = consecutiveNormalWindows;
             alertData.resetThresholdWindows = EPISODE_RESET_NORMAL;
             alertData.architecture = "cAE INT8";
-            alertData.environment = (currentEnv == ENV_TABLE) ? "ENV_TABLE" : "ENV_FLOOR";
+            alertData.environment = getEnvName(currentEnv);
             alertData.latentDim = LATENT_DIM;
             alertData.latentVector = latentVec;
             alertData.dspUs = dspUs;
@@ -529,7 +580,7 @@ void loop()
 
     TelemetryData telem;
     telem.systemState = "MONITORING";
-    telem.environment = (currentEnv == ENV_TABLE) ? "ENV_TABLE" : "ENV_FLOOR";
+    telem.environment = getEnvName(currentEnv);
     telem.isCalibrating = false;
     telem.calibrationStep = CALIBRATION_WINDOW_COUNT;
     telem.totalCalibrationSteps = CALIBRATION_WINDOW_COUNT;

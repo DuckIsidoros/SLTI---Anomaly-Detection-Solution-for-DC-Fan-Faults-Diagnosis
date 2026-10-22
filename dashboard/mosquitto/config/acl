@@ -4,23 +4,32 @@
 # ==============================================================================
 
 # ------------------------------------------------------------------------------
-# 1. Edge Devices: Strictly constrained to their specific plant equipment subtree
+# 1. Edge Hardware Node (Physical Microcontroller: esp32_edge_01)
 # ------------------------------------------------------------------------------
 user edge_node_01
-# Allow publishing high-frequency telemetry, alerts, and heartbeats for cnc_05
+# Allow publishing high-frequency telemetry, alerts, and heartbeats
 topic write v1/plant_hcm/line_01/cnc_05/+/+
-# Allow publishing Last Will and Testament (LWT) & birth certificates
+# Allow publishing Last Will and Testament (LWT) & status
 topic write v1/plant_hcm/line_01/cnc_05/status
 
 # ------------------------------------------------------------------------------
-# 2. Web Application / Dashboard: Read-only access to alert topics
+# 2. Engineer / Debugger (Used by MQTTX & Development Gateway)
+# ------------------------------------------------------------------------------
+user layvoduc
+# readwrite access allows publishing mock sensor events AND subscribing in MQTTX
+topic readwrite v1/plant_hcm/line_01/cnc_05/#
+# Allow subscription to plant-level status and alerts
+topic read v1/plant_hcm/#
+
+# ------------------------------------------------------------------------------
+# 3. Web Application / Dashboard: Read-only access to alert topics
 # ------------------------------------------------------------------------------
 user dashboard_user
-# Real-time incident visualization across all assets (4 single-level wildcards)
+# Matches: v1/<plant>/<line>/<machine>/<sensor>/alert (e.g., v1/plant_hcm/line_01/cnc_05/accelerometer/alert)
 topic read v1/+/+/+/+/alert
 
 # ------------------------------------------------------------------------------
-# 3. Backend Enterprise Service: Full ingestion pipeline access
+# 4. Backend Enterprise Service: Full ingestion pipeline access
 # ------------------------------------------------------------------------------
 user backend_service
 # Read and write access to all pipeline topics for ingestion & orchestration
