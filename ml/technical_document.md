@@ -24,9 +24,9 @@ Evaluated on an independent test dataset of **2,102 samples** containing healthy
 | **Pruned Student C-AE (FP32)**  | 86.99 KB (`.pth`)        | 99.90%   | 99.83%    | 100.00% | 0.9991   | 1.0000  |
 | **Quantized INT8 TFLite**       | **39.38 KB** (`.tflite`) | 98.81%   | 100.00%   | 97.86%  | 0.9892   | 1.0000  |
 
-- **Threshold Formulation:** Recalibrated 99.0th percentile of healthy validation reconstruction errors ($e(x, c)$) per environment:
-  - `ENV_FLOOR`: $\tau_{\text{floor}} = 0.000589$ (FP32) / $0.000984$ (INT8)
-  - `ENV_TABLE`: $\tau_{\text{table}} = 0.000591$ (FP32) / $0.000942$ (INT8)
+- **Threshold Formulation (These thresholds will be set again in deployment calibration window algorithm):** Recalibrated 99.0th percentile of healthy validation reconstruction errors ($e(x, c)$) per environment:
+  - `ENV_FLOOR`: $\tau_{\text{floor}} = 0.000589$ (FP32)
+  - `ENV_TABLE`: $\tau_{\text{table}} = 0.000591$ (FP32)
 
 ---
 
